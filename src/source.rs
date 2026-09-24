@@ -2,8 +2,9 @@
 //!
 //! Inside herdr it follows the workspace: the `compri-layout` plugin and its `follow.sh` hook
 //! append every worktree Claude works in to `<state>/spaces/<workspace id>`, one path per line,
-//! so every chat of the workspace adds to the same list. Paths given on the command line
-//! replace that list; with neither, vaglio shows the repo it was started in.
+//! so every chat of the workspace adds to the same list; until one does, the list is empty.
+//! Paths given on the command line replace that list. Outside herdr, with no paths, vaglio
+//! shows the repo it was started in.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -78,11 +79,8 @@ impl Source {
                     .for_each(&mut push);
             }
         }
-        if roots.is_empty() {
-            if let Source::Workspace { cwd, .. } = self {
-                roots.extend(crate::git::toplevel(cwd));
-            }
-        }
+        // No fallback to the pane's own repo: in herdr that is a main checkout, whose leftovers
+        // (an eval's output, a stray file) are not the work of this workspace.
         roots
     }
 

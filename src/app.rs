@@ -6,10 +6,14 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::diff::{self, Kind, Row};
 use crate::git::{self, FileChange, Tree};
+use crate::pr::PrStatus;
 
+#[derive(Clone)]
 pub struct Group {
     pub root: PathBuf,
     pub tree: Result<Tree, String>,
+    /// `None` until the first lookup answers.
+    pub pr: Option<PrStatus>,
 }
 
 pub struct Snapshot {
@@ -21,6 +25,8 @@ pub struct Snapshot {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Item {
     Header(usize),
+    /// The pull request line under a header.
+    Pr(usize),
     File(usize, usize),
     /// A worktree with nothing changed, or one git could not read.
     Empty(usize),
@@ -35,11 +41,13 @@ pub struct App {
     pub list_scroll: usize,
     pub view: Option<DiffView>,
     pub loaded: bool,
+    /// A short message in the footer, such as what `p` did.
+    pub flash: Option<(String, std::time::Instant)>,
 }
 
 impl App {
     pub fn new() -> App {
-        App { label: None, groups: Vec::new(), items: Vec::new(), selected: None, list_scroll: 0, view: None, loaded: false }
+        App { label: None, groups: Vec::new(), items: Vec::new(), selected: None, list_scroll: 0, view: None, loaded: false, flash: None }
     }
 
     pub fn tree(&self, g: usize) -> Option<&Tree> {
@@ -59,6 +67,9 @@ impl App {
         self.items.clear();
         for (g, group) in self.groups.iter().enumerate() {
             self.items.push(Item::Header(g));
+            if group.tree.is_ok() {
+                self.items.push(Item::Pr(g));
+            }
             match &group.tree {
                 Ok(t) if !t.files.is_empty() => self.items.extend((0..t.files.len()).map(|f| Item::File(g, f))),
                 _ => self.items.push(Item::Empty(g)),
@@ -128,6 +139,38 @@ impl App {
         let mut view = DiffView::open(tree, file, full, wrap);
         view.jump_to_first_change = true;
         self.view = Some(view);
+    }
+
+    /// The group whose pull request `p` opens: the open diff's, or the selected file's.
+    fn current_group(&self) -> Option<&Group> {
+        let root = match (&self.view, &self.selected) {
+            (Some(view), _) => &view.root,
+            (None, Some((root, _))) => root,
+            (None, None) => return self.groups.first(),
+        };
+        self.groups.iter().find(|g| &g.root == root)
+    }
+
+    pub fn open_pr(&mut self) {
+        let msg = match self.current_group().map(|g| (g, g.pr.as_ref())) {
+            None => "nessun worktree".to_string(),
+            Some((_, None)) => "PR: sto ancora chiedendo".to_string(),
+            Some((g, Some(status))) => match (status.web_url(), status) {
+                (Some(url), PrStatus::Found(pr)) => {
+                    if crate::pr::open(url) { format!("aperta #{}", pr.id) } else { format!("non riesco ad aprire {url}") }
+                }
+                (Some(url), _) => {
+                    let branch = g.tree.as_ref().map(|t| t.branch.clone()).unwrap_or_default();
+                    if crate::pr::open(url) { format!("nessuna PR per {branch}: aperto il form per crearla") } else { format!("non riesco ad aprire {url}") }
+                }
+                (None, PrStatus::NoCredentials) => "PR: manca il token Bitbucket (vedi README)".to_string(),
+                (None, PrStatus::OnBase) => "sei sul branch di integrazione: niente PR da aprire".to_string(),
+                (None, PrStatus::NoHost) => "PR: origin non è né Bitbucket né GitHub".to_string(),
+                (None, PrStatus::Error(e)) => e.clone(),
+                (None, _) => String::new(),
+            },
+        };
+        self.flash = Some((msg, std::time::Instant::now()));
     }
 
     /// Switches the open diff between the whole file and the hunks alone.

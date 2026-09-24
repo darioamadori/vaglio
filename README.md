@@ -11,14 +11,16 @@ exact words that changed.
 ```
  PROJ-42 checkout rework                                           9 file
  api  feature/PROJ-42-checkout-rework                                 +412 −35
+   #128 DRAFT  PROJ-42: rework checkout discounts
  › M src/checkout/cart.py                                               +48 −9
    A src/checkout/discounts.py                                            +120
    M src/checkout/payment.py                                           +61 −22
    A tests/checkout/test_discounts.py                                     +140
  web  feature/PROJ-42-checkout-ui                                       +44 −8
+   nessuna PR · p per crearla
    M app/routes/checkout.tsx                                            +30 −6
    M app/components/CartSummary.tsx                                     +14 −2
- j/k muovi · ⏎ apri · r aggiorna · q esci
+ j/k muovi · ⏎ apri · p PR · r aggiorna · q esci
 ```
 
 Press <kbd>Enter</kbd> and the list gives way to the diff, full pane:
@@ -80,8 +82,31 @@ one absolute path per line, and redraws whenever that file changes. Whatever app
 decides what shows. In my setup that is a Claude Code `PostToolUse` hook: every chat in the
 workspace that edits a file in a worktree adds that worktree, so work across several repos
 (say a backend and a frontend repo for one ticket) shows up as one list, one group per repo.
-A worktree that is removed simply drops out. `VAGLIO_STATE_DIR` points it at another state
+A worktree that is removed simply drops out, and until the first one is added the pane says so
+rather than showing the repo it was started in. `VAGLIO_STATE_DIR` points it at another state
 directory.
+
+## Pull requests
+
+Under each worktree's header, vaglio shows the pull request of its branch (number, DRAFT /
+OPEN / MERGED / DECLINED, title), or **nessuna PR** in red when the branch has none yet.
+<kbd>p</kbd> opens it in the browser, or the form to create it when there is none. Lookups are
+refreshed every minute; <kbd>r</kbd> forces one.
+
+Where the pull request is looked up depends on the worktree's `origin`:
+
+- **GitHub**: through [`gh`](https://cli.github.com), with its login (`gh auth login`).
+- **Bitbucket**: through the REST API, with an Atlassian API token. Create one at
+  <https://id.atlassian.com/manage-profile/security/api-tokens> (*Create API token with
+  scopes*, app Bitbucket, scope `read:pullrequest:bitbucket`), then store it in the macOS
+  Keychain; `-w` last makes `security` prompt for it, so it never lands in your shell history:
+
+  ```sh
+  security add-generic-password -s vaglio-bitbucket -a you@example.com -w
+  ```
+
+  The account is your Atlassian email. Elsewhere, set `VAGLIO_BITBUCKET_USER` and
+  `VAGLIO_BITBUCKET_TOKEN` instead. The token reaches `curl` on stdin, never on its command line.
 
 ## Keys
 
@@ -97,7 +122,8 @@ directory.
 | <kbd>w</kbd> | | wrap long lines on / off |
 | <kbd>]</kbd> / <kbd>[</kbd> | | next / previous file |
 | <kbd>Esc</kbd>, <kbd>q</kbd>, <kbd>h</kbd> | | back to the list |
-| <kbd>r</kbd> | refresh now | |
+| <kbd>p</kbd> | open the pull request | open the pull request |
+| <kbd>r</kbd> | refresh now, pull requests included | |
 | <kbd>q</kbd> | quit | |
 
 A diff opens on the whole file, scrolled to its first change; <kbd>f</kbd> narrows it to the
@@ -139,10 +165,8 @@ vaglio --snapshot 90x24 $'\nfn' ~/some/worktree | less -R   # hunks only, second
 | `src/source.rs` | which worktrees to show: arguments, the herdr workspace list, or the current repo |
 | `src/git.rs` | changed files and per-file diffs |
 | `src/diff.rs` | parses a unified diff into rows: line numbers, syntax colours, changed words |
-| `src/worker.rs` | background thread: file watcher and refresh timer |
+| `src/pr.rs` | the pull request of a branch, on Bitbucket or GitHub |
+| `src/worker.rs` | background thread: file watcher, refresh timer, pull request cache |
 | `src/app.rs` | what is on screen and how keys move it |
 | `src/ui.rs` | drawing |
 
-## Roadmap
-
-- The pull request of each group in its header (Bitbucket first), and <kbd>p</kbd> to open it.

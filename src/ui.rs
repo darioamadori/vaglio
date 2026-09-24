@@ -10,6 +10,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::{App, DiffView, Item};
 use crate::diff::Kind;
 use crate::git::Status;
+use crate::pr::PrStatus;
 
 const MINUS_BG: Color = Color::Rgb(0x3f, 0x00, 0x01);
 const MINUS_EMPH: Color = Color::Rgb(0x90, 0x10, 0x11);
@@ -29,6 +30,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if area.height < 3 {
         return;
     }
+    if app.flash.as_ref().is_some_and(|(_, at)| at.elapsed().as_secs() >= 4) {
+        app.flash = None;
+    }
+    let flash = app.flash.as_ref().map(|(msg, _)| Line::from(Span::styled(format!(" {msg}"), Style::new().fg(YELLOW))));
     let body = Rect { y: area.y + 1, height: area.height - 2, ..area };
     let footer = Rect { y: area.bottom() - 1, height: 1, ..area };
     if let Some(view) = app.view.as_mut() {
@@ -36,18 +41,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let view = app.view.as_ref().unwrap();
         f.render_widget(Paragraph::new(diff_title(view, area.width)), Rect { height: 1, ..area });
         draw_diff(f, view, body);
-        f.render_widget(Paragraph::new(keys(&[
+        let hints = keys(&[
             ("j/k", "scorri"),
             ("n/N", "modifica"),
             ("f", if view.full { "solo hunk" } else { "file intero" }),
             ("w", "a capo"),
             ("[/]", "file"),
+            ("p", "PR"),
             ("esc", "lista"),
-        ])), footer);
+        ]);
+        f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     } else {
         f.render_widget(Paragraph::new(list_title(app, area.width)), Rect { height: 1, ..area });
         draw_list(f, app, body);
-        f.render_widget(Paragraph::new(keys(&[("j/k", "muovi"), ("⏎", "apri"), ("r", "aggiorna"), ("q", "esci")])), footer);
+        let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("p", "PR"), ("r", "aggiorna"), ("q", "esci")]);
+        f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     }
 }
 
@@ -172,7 +180,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let height = area.height as usize;
     if let Some(sel) = app.selected_index() {
         // Keep the group header visible when its first file is selected.
-        let top = if sel > 0 && matches!(app.items[sel - 1], Item::Header(_)) { sel - 1 } else { sel };
+        let mut top = sel;
+        while top > 0 && matches!(app.items[top - 1], Item::Header(_) | Item::Pr(_)) {
+            top -= 1;
+        }
         if top < app.list_scroll {
             app.list_scroll = top;
         } else if sel >= app.list_scroll + height {
@@ -216,6 +227,7 @@ fn list_line(app: &App, item: Item, selected: bool, w: u16) -> Line<'static> {
                 )),
             }
         }
+        Item::Pr(g) => pr_line(app.groups[g].pr.as_ref(), w),
         Item::Empty(g) => match &app.groups[g].tree {
             Ok(_) => Line::from(Span::styled("    nessuna modifica rispetto alla base", Style::new().fg(DIM))),
             Err(e) => Line::from(Span::styled(format!("    {e}"), Style::new().fg(RED))),
@@ -237,6 +249,39 @@ fn list_line(app: &App, item: Item, selected: bool, w: u16) -> Line<'static> {
             ];
             left.extend(path_spans(&file.path, room));
             split_line(left, right, w, selected.then_some(SELECTED_BG))
+        }
+    }
+}
+
+fn pr_line(status: Option<&PrStatus>, w: u16) -> Line<'static> {
+    let dim = |t: &str| Line::from(Span::styled(format!("   {t}"), Style::new().fg(DIM)));
+    match status {
+        None => dim("PR …"),
+        Some(PrStatus::NoHost) => dim("PR: origin non è su Bitbucket né su GitHub"),
+        Some(PrStatus::OnBase) => dim("branch di integrazione: niente PR"),
+        Some(PrStatus::NoCredentials) => dim("PR: manca il token Bitbucket (vedi README)"),
+        Some(PrStatus::Error(e)) => Line::from(Span::styled(format!("   {e}"), Style::new().fg(RED))),
+        Some(PrStatus::Missing { .. }) => Line::from(vec![
+            Span::styled("   nessuna PR", Style::new().fg(RED).add_modifier(Modifier::BOLD)),
+            Span::styled(" · p per crearla", Style::new().fg(DIM)),
+        ]),
+        Some(PrStatus::Found(pr)) => {
+            let (badge, color) = match (pr.draft, pr.state.as_str()) {
+                (true, "OPEN") => ("DRAFT", YELLOW),
+                (_, "OPEN") => ("OPEN", GREEN),
+                (_, "MERGED") => ("MERGED", MAGENTA),
+                (_, other) => (if other == "CLOSED" { "CLOSED" } else { "DECLINED" }, RED),
+            };
+            split_line(
+                vec![
+                    Span::styled(format!("   #{} ", pr.id), Style::new().fg(TEXT).add_modifier(Modifier::BOLD)),
+                    Span::styled(badge, Style::new().fg(color).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!("  {}", pr.title), Style::new().fg(TEXT)),
+                ],
+                Vec::new(),
+                w,
+                None,
+            )
         }
     }
 }
