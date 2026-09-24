@@ -114,7 +114,7 @@ fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
     );
     // Credentials go through stdin, never the command line, where `ps` would show them.
     let child = Command::new("curl")
-        .args(["-sS", "--max-time", "10", "--fail-with-body", "--config", "-", &url])
+        .args(["-sS", "--max-time", "10", "-w", "\n%{http_code}", "--config", "-", &url])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -125,17 +125,30 @@ fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
     }
     let Ok(out) = child.wait_with_output() else { return PrStatus::Error("curl interrotto".into()) };
     if !out.status.success() {
-        let body = String::from_utf8_lossy(&out.stdout);
-        let msg = serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-            .unwrap_or_else(|| {
-                let err = String::from_utf8_lossy(&out.stderr);
-                if err.contains(" 401") || err.contains(" 403") { "token rifiutato (401/403)".into() } else { err.trim().to_string() }
-            });
-        return PrStatus::Error(format!("Bitbucket: {msg}"));
+        return PrStatus::Error(format!("Bitbucket: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    let Ok(json) = serde_json::from_slice::<Value>(&out.stdout) else { return PrStatus::Error("Bitbucket: risposta illeggibile".into()) };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    let json = serde_json::from_str::<Value>(body).unwrap_or(Value::Null);
+    match code.trim() {
+        "200" => {}
+        "401" => return PrStatus::Error("Bitbucket 401: email o token sbagliati, o token scaduto".into()),
+        "403" => {
+            // Bitbucket names the scopes the token lacks.
+            let required: Vec<&str> =
+                json["error"]["detail"]["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            let msg = if required.is_empty() {
+                json["error"]["message"].as_str().unwrap_or("permesso negato").to_string()
+            } else {
+                format!("al token manca lo scope {}", required.join(", "))
+            };
+            return PrStatus::Error(format!("Bitbucket 403: {msg}"));
+        }
+        other => {
+            let msg = json["error"]["message"].as_str().unwrap_or("errore");
+            return PrStatus::Error(format!("Bitbucket {other}: {msg}"));
+        }
+    }
     match json["values"].as_array().and_then(|v| v.first()) {
         None => PrStatus::Missing { new_url },
         Some(pr) => PrStatus::Found(Pr {
