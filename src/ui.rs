@@ -135,9 +135,15 @@ fn split_line(mut left: Vec<Span<'static>>, right: Vec<Span<'static>>, total: u1
 fn list_title(app: &App, w: u16) -> Line<'static> {
     let name = app.label.clone().unwrap_or_else(|| "vaglio".into());
     let n = app.file_count();
+    let mut right = Vec::new();
+    if app.current.is_some() {
+        right.push(Span::styled("● ", Style::new().fg(GREEN)));
+        right.push(Span::styled("questa chat   ", Style::new().fg(DIM)));
+    }
+    right.push(Span::styled(format!("{n} file "), Style::new().fg(DIM)));
     split_line(
         vec![Span::styled(format!(" {name}"), Style::new().fg(TEXT).add_modifier(Modifier::BOLD))],
-        vec![Span::styled(format!("{n} file "), Style::new().fg(DIM))],
+        right,
         w,
         None,
     )
@@ -217,9 +223,6 @@ fn list_line(app: &App, item: Item, selected: bool, w: u16) -> Line<'static> {
                         Span::styled(t.repo.clone(), Style::new().fg(BLUE).add_modifier(Modifier::BOLD)),
                         Span::styled(format!("  {}", t.branch), Style::new().fg(MAGENTA).add_modifier(Modifier::BOLD)),
                     ];
-                    if !t.root.starts_with(crate::source::worktrees_dir()) {
-                        left.push(Span::styled("  clone principale", Style::new().fg(DIM)));
-                    }
                     if !t.base.ends_with("main") {
                         left.push(Span::styled(format!("  vs {}", t.base), Style::new().fg(DIM)));
                     }
@@ -265,7 +268,7 @@ fn pr_line(status: Option<&PrStatus>, w: u16) -> Line<'static> {
         None => dim("PR …"),
         Some(PrStatus::NoHost) => dim("PR: origin non è su Bitbucket né su GitHub"),
         Some(PrStatus::OnBase) => dim("branch di integrazione: niente PR"),
-        Some(PrStatus::NoCredentials) => dim("PR: manca il token Bitbucket (vedi README)"),
+        Some(PrStatus::NoCredentials) => dim("PR: nessun token Bitbucket (vedi README)"),
         Some(PrStatus::Error(e)) => Line::from(Span::styled(format!("   {e}"), Style::new().fg(RED))),
         Some(PrStatus::Missing { .. }) => Line::from(vec![
             Span::styled("   nessuna PR", Style::new().fg(RED).add_modifier(Modifier::BOLD)),
