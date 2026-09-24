@@ -7,6 +7,8 @@
 //! lands; the rest of the workspace follows, for a task spread over several repos. With neither,
 //! the list is empty until a chat starts one: a main checkout is not a task's work. The design
 //! documents the workspace's chats wrote are listed in `<state>/docs/<workspace id>` (see `docs`).
+//! A workspace where `/pr-review` ran has `<state>/review/<workspace id>` and shows the pull
+//! request under review instead (see `review`).
 //!
 //! Paths given on the command line replace all of that. Outside herdr, with no paths, vaglio
 //! shows the repo it was started in.
@@ -31,7 +33,7 @@ fn state_dir() -> PathBuf {
 #[derive(Clone, Debug)]
 pub enum Source {
     Paths(Vec<PathBuf>),
-    Workspace { id: String, tab: Option<PathBuf>, space: PathBuf, docs: PathBuf, cwd: PathBuf },
+    Workspace { id: String, tab: Option<PathBuf>, space: PathBuf, docs: PathBuf, review: PathBuf, cwd: PathBuf },
     Cwd(PathBuf),
 }
 
@@ -46,9 +48,10 @@ impl Source {
                 let state = state_dir();
                 let space = state.join("spaces").join(id.replace(':', "_"));
                 let docs = state.join("docs").join(id.replace(':', "_"));
+                let review = state.join("review").join(id.replace(':', "_"));
                 let tab = std::env::var("HERDR_TAB_ID").ok().filter(|t| !t.is_empty());
                 let tab = tab.map(|t| state.join("tabs").join(t.replace(':', "_")));
-                Source::Workspace { id, tab, space, docs, cwd }
+                Source::Workspace { id, tab, space, docs, review, cwd }
             }
             _ => Source::Cwd(cwd),
         }
@@ -57,7 +60,7 @@ impl Source {
     /// The state files to watch besides the worktrees themselves.
     pub fn state_files(&self) -> Vec<PathBuf> {
         match self {
-            Source::Workspace { tab, space, docs, .. } => tab.iter().chain([space, docs]).cloned().collect(),
+            Source::Workspace { tab, space, docs, review, .. } => tab.iter().chain([space, docs, review]).cloned().collect(),
             _ => Vec::new(),
         }
     }
@@ -79,6 +82,12 @@ impl Source {
             }
         }
         roots
+    }
+
+    /// What `/pr-review` was last run with in this workspace; `None` if it never was.
+    pub fn review_args(&self) -> Option<String> {
+        let Source::Workspace { review, .. } = self else { return None };
+        std::fs::read_to_string(review).ok()
     }
 
     /// The workspace's design documents; `None` outside herdr, where there is no list to read.
