@@ -106,18 +106,22 @@ Where the pull request is looked up depends on the worktree's `origin`:
   token, from `VAGLIO_BITBUCKET_USER` and `VAGLIO_BITBUCKET_TOKEN`, or from the macOS Keychain
   item `vaglio-bitbucket`. Create the token at
   <https://id.atlassian.com/manage-profile/security/api-tokens> (*Create API token with
-  scopes*, app Bitbucket, scope `read:pullrequest:bitbucket` only), then store it, with `-w`
-  last so `security` prompts for it and it never lands in your shell history:
+  scopes*, app Bitbucket, scopes `read:pullrequest:bitbucket` and `read:repository:bitbucket`,
+  nothing else). Copy it, then store it straight from the clipboard and clear the clipboard:
 
   ```sh
-  security add-generic-password -s vaglio-bitbucket -a you@example.com -w
+  security add-generic-password -U -s vaglio-bitbucket -a you@example.com -w "$(pbpaste)"
+  pbcopy < /dev/null
   ```
+
+  Not with a bare `-w` and the prompt it opens: that prompt keeps only the first 128
+  characters, an Atlassian token is longer, and the cut-down token fails with a 401. Your shell
+  history keeps the literal `$(pbpaste)`, not the token.
 
   The token reaches `curl` on stdin, never on its command line. To try it without opening the
   pane, run `vaglio --check-token` inside any clone whose `origin` is on Bitbucket: it prints
   `token ok`, or why Bitbucket refused it (a 401 is a wrong email or token, a 403 names the
-  missing scope). If a 403 asks for `read:repository:bitbucket`, add that one too, and nothing
-  else.
+  missing scope). If a 403 names another scope, add that one, and nothing else.
 
 ## Keys
 
