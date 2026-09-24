@@ -123,6 +123,29 @@ Where the pull request is looked up depends on the worktree's `origin`:
   `token ok`, or why Bitbucket refused it (a 401 is a wrong email or token, a 403 names the
   missing scope). If a 403 names another scope, add that one, and nothing else.
 
+## Design documents
+
+Pinned at the foot of the list, **design doc** counts the design documents the chats of the
+workspace have written: published artifacts, Notion pages, Claude Docs and Markdown files.
+<kbd>Enter</kbd> on it lists them, newest first; <kbd>Enter</kbd> on one opens it where it
+belongs, not in the terminal: a Notion page in the Notion app, an artifact or a Claude Doc in the
+default browser, a Markdown file in VS Code (each falling back to the system default).
+<kbd>y</kbd> copies its link or path.
+
+The list is a state file next to the other two, one JSON object per line:
+
+```
+~/.local/state/herdr/plugins/dario.compri-layout/docs/<workspace id>
+{"kind": "artifact", "title": "Model bake-off", "target": "https://claude.ai/code/artifact/…", "at": 1790259848}
+```
+
+`kind` is `artifact`, `notion`, `doc` or `md`; `target` is the URL or the absolute path; the
+same target written again is the same document, with its newest title. In my setup a Claude
+Code `PostToolUse` hook appends a line whenever a chat publishes an artifact, creates a Notion
+page or a Claude Doc, or writes a `.md` file (memory, skills, `CLAUDE.md`, `README.md` and the
+like excluded). vaglio opens only what such a hook could have written: `https` links on
+claude.ai or Notion, and `.md` files that still exist. The row shows only inside herdr.
+
 ## Keys
 
 | Key | List | Diff |
@@ -131,7 +154,7 @@ Where the pull request is looked up depends on the worktree's `origin`:
 | <kbd>Ctrl-d</kbd> / <kbd>Ctrl-u</kbd> | half page | half page |
 | <kbd>Space</kbd> / <kbd>b</kbd> | | page down / up |
 | <kbd>g</kbd> / <kbd>G</kbd> | first / last file | top / bottom |
-| <kbd>Enter</kbd>, <kbd>l</kbd> | open the diff | |
+| <kbd>Enter</kbd>, <kbd>l</kbd> | open the diff, or the design documents list | |
 | <kbd>n</kbd> / <kbd>N</kbd> | | next / previous change |
 | <kbd>f</kbd> | | whole file ↔ hunks only |
 | <kbd>w</kbd> | | wrap long lines on / off |
@@ -182,6 +205,7 @@ vaglio --snapshot 90x24 $'\nfn' ~/some/worktree | less -R   # hunks only, second
 | `src/git.rs` | changed files and per-file diffs |
 | `src/diff.rs` | parses a unified diff into rows: line numbers, syntax colours, changed words |
 | `src/pr.rs` | the pull request of a branch, on Bitbucket or GitHub |
+| `src/docs.rs` | the workspace's design documents, and opening each in its own app |
 | `src/worker.rs` | background thread: file watcher, refresh timer, pull request cache |
 | `src/app.rs` | what is on screen and how keys move it |
 | `src/ui.rs` | drawing |

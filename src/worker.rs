@@ -91,7 +91,8 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
                 Group { tree, root, pr }
             })
             .collect();
-        if out.send(Snapshot { label: label.clone(), current: current.clone(), groups: groups.clone() }).is_err() {
+        let docs = source.docs();
+        if out.send(Snapshot { label: label.clone(), current: current.clone(), groups: groups.clone(), docs: docs.clone() }).is_err() {
             return;
         }
 
@@ -107,7 +108,7 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
             group.pr = Some(status);
             looked_up = true;
         }
-        if looked_up && out.send(Snapshot { label: label.clone(), current: current.clone(), groups }).is_err() {
+        if looked_up && out.send(Snapshot { label: label.clone(), current: current.clone(), groups, docs }).is_err() {
             return;
         }
 

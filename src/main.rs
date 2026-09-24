@@ -3,6 +3,7 @@
 mod app;
 mod clipboard;
 mod diff;
+mod docs;
 mod git;
 mod pr;
 mod source;
@@ -89,6 +90,18 @@ fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<worker:
         }
         _ => {}
     }
+    if app.docs_view.is_some() {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => app.docs_view = None,
+            KeyCode::Char('j') | KeyCode::Down => app.move_doc(1),
+            KeyCode::Char('k') | KeyCode::Up => app.move_doc(-1),
+            KeyCode::Char('g') | KeyCode::Home => app.move_doc(isize::MIN / 2),
+            KeyCode::Char('G') | KeyCode::End => app.move_doc(isize::MAX / 2),
+            KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right | KeyCode::Char('o') => app.open_doc(),
+            _ => {}
+        }
+        return true;
+    }
     if let Some(view) = app.view.as_mut() {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => app.view = None,
@@ -147,7 +160,7 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
         })
         .collect();
     let mut app = App::new();
-    app.apply(app::Snapshot { label: source.label(), current: found.current, groups });
+    app.apply(app::Snapshot { label: source.label(), current: found.current, groups, docs: source.docs() });
     let mut terminal = ratatui::Terminal::new(TestBackend::new(w, h))?;
     let (tx, _rx) = mpsc::channel();
     terminal.draw(|f| ui::draw(f, &mut app))?;
