@@ -147,6 +147,42 @@ page or a Claude Doc, or writes a `.md` file (memory, skills, `CLAUDE.md`, `READ
 like excluded). vaglio opens only what such a hook could have written: `https` links on
 claude.ai or Notion, and `.md` files that still exist. The row shows only inside herdr.
 
+## Review workspaces
+
+A workspace where `/pr-review` was run is a review workspace from then on. Instead of the
+workspace's worktrees, vaglio shows the pull request under review, with a yellow **REVIEW**
+badge in every title so it is never mistaken for a task's pane:
+
+```
+ REVIEW  PR 325                                                                   6 file
+   monorepo-ai  feature/CA-610-x-client-id-send-email                                +27 −3
+   #325 MERGED  CA-610: forward x-client-id on ai-assistant platform actions
+ › M apps/ai-assistant/ai_assistant/api/v1/endpoints/chat_stream.py                     +10
+```
+
+The hook saves what followed the command to another state file, and each new `/pr-review`
+replaces it:
+
+```
+~/.local/state/herdr/plugins/dario.compri-layout/review/<workspace id>
+```
+
+vaglio reads it as a pull request link (Bitbucket `…/pull-requests/<id>` or GitHub
+`…/pull/<n>`, whose branches it asks for with the same credentials as above), or else as the
+first branch name it finds in the text (`feature/PROJ-42-checkout`, or a sentence naming one).
+The worktree already on that branch wins, since it is what the reviewing chat reads; otherwise
+it takes the repo's main checkout under `~/Developer/compri`, fetches the branch, and diffs
+`origin/<branch>` against its merge base with the pull request's destination (or the
+integration branch). The fetch is repeated every minute and on <kbd>r</kbd>, so new commits on
+the pull request show up. A bare `/pr-review` reviews `monorepo-ai`'s current branch, as the
+command does.
+
+## Mouse
+
+The wheel scrolls a diff three lines at a time, and moves the selection in the lists. A click
+selects a file or a document, a second click on it opens it; a click on a pull request line opens
+that pull request.
+
 ## Keys
 
 | Key | List | Diff |

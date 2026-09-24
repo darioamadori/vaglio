@@ -45,7 +45,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if let Some(view) = app.view.as_mut() {
         view.layout(body.width, body.height);
         let view = app.view.as_ref().unwrap();
-        f.render_widget(Paragraph::new(diff_title(view, area.width)), Rect { height: 1, ..area });
+        f.render_widget(Paragraph::new(diff_title(view, &review_badge(app), area.width)), Rect { height: 1, ..area });
         draw_diff(f, view, body);
         let hints = keys(&[
             ("j/k", "scorri"),
@@ -61,13 +61,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else {
         f.render_widget(Paragraph::new(list_title(app, area.width)), Rect { height: 1, ..area });
         // The documents row sits at the foot of the pane, whatever the list's length.
+        app.docs_row_area = None;
         let list = if app.docs.is_some() && body.height > 2 {
             let row = Rect { y: body.bottom() - 1, height: 1, ..body };
             f.render_widget(Paragraph::new(docs_row(app, area.width)), row);
+            app.docs_row_area = Some(row);
             Rect { height: body.height - 2, ..body }
         } else {
             body
         };
+        app.list_area = list;
         draw_list(f, app, list);
         let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("p", "PR"), ("y", "copia path"), ("r", "aggiorna"), ("q", "esci")]);
         f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
@@ -146,16 +149,21 @@ fn split_line(mut left: Vec<Span<'static>>, right: Vec<Span<'static>>, total: u1
     }
 }
 
+/// The badge a review workspace carries on every screen, so it is never taken for a task's.
+fn review_badge(app: &App) -> Vec<Span<'static>> {
+    if !app.review {
+        return Vec::new();
+    }
+    vec![Span::raw(" "), Span::styled(" REVIEW ", Style::new().fg(Color::Rgb(0, 0, 0)).bg(YELLOW).add_modifier(Modifier::BOLD))]
+}
+
 fn list_title(app: &App, w: u16) -> Line<'static> {
     let name = app.label.clone().unwrap_or_else(|| "vaglio".into());
     let n = app.file_count();
     let right = vec![Span::styled(format!("{n} file "), Style::new().fg(DIM))];
-    split_line(
-        vec![Span::styled(format!(" {name}"), Style::new().fg(TEXT).add_modifier(Modifier::BOLD))],
-        right,
-        w,
-        None,
-    )
+    let mut left = review_badge(app);
+    left.push(Span::styled(format!(" {name}"), Style::new().fg(TEXT).add_modifier(Modifier::BOLD)));
+    split_line(left, right, w, None)
 }
 
 /// `libs/ai-agents/…/deferral.py`, cut from the left so the file name always shows.
@@ -326,7 +334,9 @@ fn docs_title(app: &App, w: u16) -> Line<'static> {
     )
 }
 
-fn draw_docs(f: &mut Frame, app: &App, area: Rect) {
+fn draw_docs(f: &mut Frame, app: &mut App, area: Rect) {
+    app.docs_area = area;
+    app.docs_top = 0;
     let docs = app.docs.as_deref().unwrap_or_default();
     if docs.is_empty() {
         let msg = vec![
@@ -340,6 +350,8 @@ fn draw_docs(f: &mut Frame, app: &App, area: Rect) {
     let sel = app.docs_view.unwrap_or(0);
     let height = area.height as usize;
     let top = sel.saturating_sub(height.saturating_sub(1));
+    app.docs_top = top;
+    let docs = app.docs.as_deref().unwrap_or_default();
     let lines: Vec<Line> = docs
         .iter()
         .enumerate()
@@ -365,8 +377,9 @@ fn draw_docs(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
-fn diff_title(view: &DiffView, w: u16) -> Line<'static> {
-    let mut left = vec![Span::styled(format!(" {} ", view.file.status.letter()), Style::new().fg(YELLOW))];
+fn diff_title(view: &DiffView, badge: &[Span<'static>], w: u16) -> Line<'static> {
+    let mut left = badge.to_vec();
+    left.push(Span::styled(format!(" {} ", view.file.status.letter()), Style::new().fg(YELLOW)));
     left.extend(path_spans(&view.file.path, (w as usize).saturating_sub(30)));
     let mut right = counts(view.file.added, view.file.deleted);
     let n = view.changes.len();

@@ -101,38 +101,30 @@ fn percent_encode(s: &str) -> String {
         .collect()
 }
 
-fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
-    let new_url = format!("https://bitbucket.org/{workspace}/{repo}/pull-requests/new?source={}", percent_encode(branch));
-    let Some((user, token)) = bitbucket_credentials() else { return PrStatus::NoCredentials };
-    // BBQL string literal: a quote or backslash in the branch must not end it early.
-    let literal = branch.replace('\\', "\\\\").replace('"', "\\\"");
-    let query = percent_encode(&format!("source.branch.name=\"{literal}\""));
-    let url = format!(
-        "https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}/pullrequests?q={query}\
-         &state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=1\
-         &fields=values.id,values.title,values.state,values.draft,values.links.html.href"
-    );
+/// One GET on the Bitbucket REST API. Errors come back as the status to show.
+fn bitbucket_get(url: &str) -> Result<Value, PrStatus> {
+    let Some((user, token)) = bitbucket_credentials() else { return Err(PrStatus::NoCredentials) };
     // Credentials go through stdin, never the command line, where `ps` would show them.
     let child = Command::new("curl")
-        .args(["-sS", "--max-time", "10", "-w", "\n%{http_code}", "--config", "-", &url])
+        .args(["-sS", "--max-time", "10", "-w", "\n%{http_code}", "--config", "-", url])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
-    let Ok(mut child) = child else { return PrStatus::Error("curl non trovato".into()) };
+    let Ok(mut child) = child else { return Err(PrStatus::Error("curl non trovato".into())) };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = writeln!(stdin, "user = \"{user}:{token}\"");
     }
-    let Ok(out) = child.wait_with_output() else { return PrStatus::Error("curl interrotto".into()) };
+    let Ok(out) = child.wait_with_output() else { return Err(PrStatus::Error("curl interrotto".into())) };
     if !out.status.success() {
-        return PrStatus::Error(format!("Bitbucket: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(PrStatus::Error(format!("Bitbucket: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
     let json = serde_json::from_str::<Value>(body).unwrap_or(Value::Null);
     match code.trim() {
-        "200" => {}
-        "401" => return PrStatus::Error("Bitbucket 401: email o token sbagliati, o token scaduto".into()),
+        "200" => Ok(json),
+        "401" => Err(PrStatus::Error("Bitbucket 401: email o token sbagliati, o token scaduto".into())),
         "403" => {
             // Bitbucket names the scopes the token lacks.
             let required: Vec<&str> =
@@ -142,13 +134,29 @@ fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
             } else {
                 format!("al token manca lo scope {}", required.join(", "))
             };
-            return PrStatus::Error(format!("Bitbucket 403: {msg}"));
+            Err(PrStatus::Error(format!("Bitbucket 403: {msg}")))
         }
         other => {
             let msg = json["error"]["message"].as_str().unwrap_or("errore");
-            return PrStatus::Error(format!("Bitbucket {other}: {msg}"));
+            Err(PrStatus::Error(format!("Bitbucket {other}: {msg}")))
         }
     }
+}
+
+fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
+    let new_url = format!("https://bitbucket.org/{workspace}/{repo}/pull-requests/new?source={}", percent_encode(branch));
+    // BBQL string literal: a quote or backslash in the branch must not end it early.
+    let literal = branch.replace('\\', "\\\\").replace('"', "\\\"");
+    let query = percent_encode(&format!("source.branch.name=\"{literal}\""));
+    let url = format!(
+        "https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}/pullrequests?q={query}\
+         &state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=1\
+         &fields=values.id,values.title,values.state,values.draft,values.links.html.href"
+    );
+    let json = match bitbucket_get(&url) {
+        Ok(json) => json,
+        Err(status) => return status,
+    };
     match json["values"].as_array().and_then(|v| v.first()) {
         None => PrStatus::Missing { new_url },
         Some(pr) => PrStatus::Found(Pr {
@@ -158,6 +166,41 @@ fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
             draft: pr["draft"].as_bool().unwrap_or(false),
             url: pr["links"]["html"]["href"].as_str().unwrap_or("").to_string(),
         }),
+    }
+}
+
+/// The source and destination branches of pull request `id`.
+pub fn branches(root: &Path, host: &Host, id: u64) -> Result<(String, String), String> {
+    let describe = |status: PrStatus| match status {
+        PrStatus::NoCredentials => "PR: manca il token Bitbucket (vedi README)".to_string(),
+        PrStatus::Error(e) => e,
+        other => format!("{other:?}"),
+    };
+    let (src, dst) = match host {
+        Host::Bitbucket { workspace, repo } => {
+            let url = format!(
+                "https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}/pullrequests/{id}\
+                 ?fields=source.branch.name,destination.branch.name"
+            );
+            let json = bitbucket_get(&url).map_err(describe)?;
+            (json["source"]["branch"]["name"].clone(), json["destination"]["branch"]["name"].clone())
+        }
+        Host::GitHub { owner, repo } => {
+            let out = Command::new("gh")
+                .current_dir(root)
+                .args(["pr", "view", &id.to_string(), "--repo", &format!("{owner}/{repo}"), "--json", "headRefName,baseRefName"])
+                .output()
+                .map_err(|_| "gh non trovato".to_string())?;
+            if !out.status.success() {
+                return Err(format!("gh: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            }
+            let json: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+            (json["headRefName"].clone(), json["baseRefName"].clone())
+        }
+    };
+    match (src.as_str(), dst.as_str()) {
+        (Some(s), Some(d)) => Ok((s.to_string(), d.to_string())),
+        _ => Err(format!("PR #{id}: branch non trovati nella risposta")),
     }
 }
 

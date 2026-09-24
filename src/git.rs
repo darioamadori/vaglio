@@ -45,6 +45,9 @@ pub struct Tree {
     /// The integration branch the diff is taken against (`origin/main`, `origin/develop`).
     pub base: String,
     pub merge_base: String,
+    /// The ref whose changes are shown (`origin/<branch>` for a pull request under review);
+    /// `None` means the working tree, untracked files included.
+    pub head: Option<String>,
     pub files: Vec<FileChange>,
 }
 
@@ -99,7 +102,7 @@ fn repo_name(root: &Path) -> String {
 }
 
 /// `develop` where the repo has one, `main` otherwise.
-fn base_branch(root: &Path) -> String {
+pub fn base_branch(root: &Path) -> String {
     for candidate in ["origin/develop", "origin/HEAD", "origin/main", "main", "master"] {
         if git(root, &["rev-parse", "--verify", "--quiet", candidate]).is_ok() {
             if candidate == "origin/HEAD" {
@@ -118,7 +121,7 @@ pub fn load(root: &Path) -> Result<Tree> {
     let base = base_branch(root);
     let merge_base = git_str(root, &["merge-base", "HEAD", &base]).unwrap_or_else(|_| "HEAD".into());
 
-    let mut files = changed(root, &merge_base)?;
+    let mut files = changed(root, &merge_base, None)?;
     for path in split_nul(&git(root, &["ls-files", "--others", "--exclude-standard", "-z"])?) {
         let lines = std::fs::read(root.join(&path)).ok().and_then(|b| {
             (!b.contains(&0)).then(|| b.iter().filter(|&&c| c == b'\n').count() as u32 + u32::from(!b.is_empty() && !b.ends_with(b"\n")))
@@ -133,6 +136,23 @@ pub fn load(root: &Path) -> Result<Tree> {
         branch: if branch.is_empty() { "(detached)".into() } else { branch },
         base,
         merge_base,
+        head: None,
+        files,
+    })
+}
+
+/// A branch as it stands on `head` (say `origin/feature/x`), against its merge base with `base`:
+/// what its pull request shows, with no checkout of it anywhere.
+pub fn load_ref(root: &Path, head: &str, base: &str) -> Result<Tree> {
+    let merge_base = git_str(root, &["merge-base", head, base])?;
+    let files = changed(root, &merge_base, Some(head))?;
+    Ok(Tree {
+        root: root.to_path_buf(),
+        repo: repo_name(root),
+        branch: head.strip_prefix("origin/").unwrap_or(head).to_string(),
+        base: base.to_string(),
+        merge_base,
+        head: Some(head.to_string()),
         files,
     })
 }
@@ -141,9 +161,12 @@ fn split_nul(out: &[u8]) -> Vec<String> {
     out.split(|&b| b == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect()
 }
 
-/// Committed, staged and unstaged changes since the merge base, in one pass.
-fn changed(root: &Path, merge_base: &str) -> Result<Vec<FileChange>> {
-    let status = git(root, &["diff", "--no-ext-diff", "--name-status", "-z", "-M", merge_base])?;
+/// Committed, staged and unstaged changes since the merge base, in one pass; with `head`, only
+/// what that ref committed.
+fn changed(root: &Path, merge_base: &str, head: Option<&str>) -> Result<Vec<FileChange>> {
+    let mut args = vec!["diff", "--no-ext-diff", "--name-status", "-z", "-M", merge_base];
+    args.extend(head);
+    let status = git(root, &args)?;
     let mut fields = split_nul(&status).into_iter();
     let mut files = Vec::new();
     while let Some(code) = fields.next() {
@@ -158,7 +181,8 @@ fn changed(root: &Path, merge_base: &str) -> Result<Vec<FileChange>> {
     }
 
     // numstat -z: "A\tD\tpath\0", or "A\tD\t\0old\0new\0" for a rename.
-    let numstat = git(root, &["diff", "--no-ext-diff", "--numstat", "-z", "-M", merge_base])?;
+    args[2] = "--numstat";
+    let numstat = git(root, &args)?;
     let mut records = numstat.split(|&b| b == 0).map(|s| String::from_utf8_lossy(s).into_owned());
     while let Some(rec) = records.next() {
         let mut parts = rec.splitn(3, '\t');
@@ -183,7 +207,9 @@ pub fn diff(tree: &Tree, file: &FileChange, context: Option<u32>) -> Result<Stri
     let out = if file.status == Status::Untracked {
         git(&tree.root, &["diff", "--no-index", "--no-ext-diff", "--no-textconv", &unified, "--", "/dev/null", &file.path])?
     } else {
-        let mut args = vec!["diff", "--no-ext-diff", "--no-textconv", "-M", &unified, &tree.merge_base, "--"];
+        let mut args = vec!["diff", "--no-ext-diff", "--no-textconv", "-M", &unified, &tree.merge_base];
+        args.extend(tree.head.as_deref());
+        args.push("--");
         if let Some(old) = &file.old_path {
             args.push(old);
         }

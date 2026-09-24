@@ -11,6 +11,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::app::{Group, Snapshot};
 use crate::pr::{self, PrStatus};
+use crate::review::{self, Target};
 use crate::source::Source;
 
 /// Why the worker should look again.
@@ -26,6 +27,8 @@ const EVERY: Duration = Duration::from_secs(3);
 const SETTLE: Duration = Duration::from_millis(200);
 const LABEL_EVERY: Duration = Duration::from_secs(30);
 const PR_EVERY: Duration = Duration::from_secs(60);
+/// A review whose branch was not found yet: the chat may be about to fetch it or check it out.
+const REVIEW_RETRY: Duration = Duration::from_secs(20);
 
 /// Directories whose churn never shows in a diff. `.git` too: commits are caught by the timer.
 const NOISE: &[&str] = &[
@@ -34,6 +37,40 @@ const NOISE: &[&str] = &[
 
 fn is_noise(path: &Path) -> bool {
     path.components().any(|c| NOISE.contains(&c.as_os_str().to_string_lossy().as_ref()))
+}
+
+/// A group as its target stands now; the pull request is looked up separately.
+pub fn load_group(target: &Target) -> Group {
+    let (root, tree) = match target {
+        Target::Live(root) => (root.clone(), crate::git::load(root).map_err(|e| e.to_string())),
+        Target::Ref { root, head, base } => (root.clone(), crate::git::load_ref(root, head, base).map_err(|e| e.to_string())),
+        Target::Missing { what, why } => (PathBuf::from(what), Err(why.clone())),
+    };
+    Group { root, tree, pr: None }
+}
+
+/// What to show: the pull request under review in a review workspace, the worktrees otherwise.
+/// `resolved` caches the review's resolution, which may fetch; `refresh` forces a new one.
+pub fn targets(source: &Source, resolved: &mut Option<(String, Instant, Target)>, refresh: bool) -> (Vec<Target>, Option<PathBuf>, bool) {
+    let Some(args) = source.review_args() else {
+        let found = source.roots();
+        return (found.list.into_iter().map(Target::Live).collect(), found.current, false);
+    };
+    let stale = match resolved.as_ref() {
+        None => true,
+        Some((prev, at, target)) => {
+            *prev != args
+                || refresh
+                || (target.is_missing() && at.elapsed() > REVIEW_RETRY)
+                // Re-fetch now and then: the pull request may get new commits during the review.
+                || (matches!(target, Target::Ref { .. }) && at.elapsed() > PR_EVERY)
+        }
+    };
+    if stale {
+        let target = review::resolve(&args);
+        *resolved = Some((args, Instant::now(), target));
+    }
+    (resolved.iter().map(|(_, _, t)| t.clone()).collect(), None, true)
 }
 
 pub fn spawn(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receiver<Poke>) {
@@ -66,9 +103,12 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
     let mut label = None;
     let mut label_at: Option<Instant> = None;
     let mut prs: HashMap<(PathBuf, String), (Instant, PrStatus)> = HashMap::new();
+    let mut resolved = None;
+    let mut refresh = false;
     loop {
-        let found = source.roots();
-        let (roots, current) = (found.list, found.current);
+        let (targets, current, in_review) = targets(&source, &mut resolved, std::mem::take(&mut refresh));
+        let roots: Vec<PathBuf> =
+            targets.iter().filter_map(|t| if let Target::Live(p) = t { Some(p.clone()) } else { None }).collect();
         if let Some(w) = watcher.as_mut() {
             for gone in watched.iter().filter(|p| !roots.contains(p)) {
                 let _ = w.unwatch(gone);
@@ -83,16 +123,18 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
             label = source.label();
             label_at = Some(Instant::now());
         }
-        let mut groups: Vec<Group> = roots
-            .into_iter()
-            .map(|root| {
-                let tree = crate::git::load(&root).map_err(|e| e.to_string());
-                let pr = tree.as_ref().ok().and_then(|t| prs.get(&(root.clone(), t.branch.clone()))).map(|(_, s)| s.clone());
-                Group { tree, root, pr }
+        let mut groups: Vec<Group> = targets
+            .iter()
+            .map(|target| {
+                let mut group = load_group(target);
+                let key = group.tree.as_ref().ok().map(|t| (group.root.clone(), t.branch.clone()));
+                group.pr = key.and_then(|k| prs.get(&k)).map(|(_, s)| s.clone());
+                group
             })
             .collect();
         let docs = source.docs();
-        if out.send(Snapshot { label: label.clone(), current: current.clone(), groups: groups.clone(), docs: docs.clone() }).is_err() {
+        let snapshot = |groups: Vec<Group>, docs| Snapshot { label: label.clone(), current: current.clone(), groups, docs, review: in_review };
+        if out.send(snapshot(groups.clone(), docs.clone())).is_err() {
             return;
         }
 
@@ -108,13 +150,14 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
             group.pr = Some(status);
             looked_up = true;
         }
-        if looked_up && out.send(Snapshot { label: label.clone(), current: current.clone(), groups, docs }).is_err() {
+        if looked_up && out.send(snapshot(groups, docs)).is_err() {
             return;
         }
 
         let mut on_poke = |poke: Poke| {
             if matches!(poke, Poke::All) {
                 prs.clear();
+                refresh = true;
             }
         };
         match pokes.recv_timeout(EVERY) {

@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthChar;
 
 use crate::diff::{self, Kind, Row};
@@ -24,6 +25,8 @@ pub struct Snapshot {
     pub groups: Vec<Group>,
     /// The workspace's design documents; `None` when vaglio runs outside herdr.
     pub docs: Option<Vec<Doc>>,
+    /// A review workspace: the one group is the pull request under review.
+    pub review: bool,
 }
 
 /// What the cursor is on: a file, or the design documents row pinned under the list.
@@ -57,8 +60,15 @@ pub struct App {
     /// The design documents list, open, with the index of the selected one.
     pub docs_view: Option<usize>,
     pub loaded: bool,
+    pub review: bool,
     /// A short message in the footer, such as what `p` did.
     pub flash: Option<(String, std::time::Instant)>,
+    /// Where the last frame drew the list, the documents row and the documents list (with the
+    /// index of its top line), so a click can be told apart.
+    pub list_area: Rect,
+    pub docs_row_area: Option<Rect>,
+    pub docs_area: Rect,
+    pub docs_top: usize,
 }
 
 impl App {
@@ -74,7 +84,12 @@ impl App {
             docs: None,
             docs_view: None,
             loaded: false,
+            review: false,
             flash: None,
+            list_area: Rect::default(),
+            docs_row_area: None,
+            docs_area: Rect::default(),
+            docs_top: 0,
         }
     }
 
@@ -90,6 +105,7 @@ impl App {
 
     pub fn apply(&mut self, snap: Snapshot) {
         self.loaded = true;
+        self.review = snap.review;
         self.label = snap.label;
         // The chat moved to another worktree: follow it there, as yazi does.
         let moved = snap.current.is_some() && snap.current != self.current;
@@ -213,17 +229,21 @@ impl App {
     }
 
     /// The group whose pull request `p` opens: the open diff's, or the selected file's.
-    fn current_group(&self) -> Option<&Group> {
+    fn current_group_index(&self) -> Option<usize> {
         let root = match (&self.view, &self.selected) {
             (Some(view), _) => &view.root,
             (None, Some(Sel::File(root, _))) => root,
-            (None, _) => return self.groups.first(),
+            (None, _) => return (!self.groups.is_empty()).then_some(0),
         };
-        self.groups.iter().find(|g| &g.root == root)
+        self.groups.iter().position(|g| &g.root == root)
     }
 
     pub fn open_pr(&mut self) {
-        let msg = match self.current_group().map(|g| (g, g.pr.as_ref())) {
+        self.open_pr_of(self.current_group_index());
+    }
+
+    fn open_pr_of(&mut self, group: Option<usize>) {
+        let msg = match self.groups.get(group.unwrap_or(usize::MAX)).map(|g| (g, g.pr.as_ref())) {
             None => "nessun worktree".to_string(),
             Some((_, None)) => "PR: sto ancora chiedendo".to_string(),
             Some((g, Some(status))) => match (status.web_url(), status) {
@@ -284,6 +304,59 @@ impl App {
             self.move_by(-1);
         }
         self.open();
+    }
+
+    /// A left click: selects what is under it, and opens it when it was already selected. On a
+    /// pull request line, opens that pull request.
+    pub fn click(&mut self, column: u16, row: u16) {
+        let hit = |r: Rect| r.contains(Position { x: column, y: row });
+        if self.docs_view.is_some() {
+            let n = self.docs.as_ref().map_or(0, Vec::len);
+            let i = self.docs_top + row.saturating_sub(self.docs_area.y) as usize;
+            if !hit(self.docs_area) || i >= n {
+                return;
+            }
+            if self.docs_view == Some(i) {
+                self.open_doc();
+            } else {
+                self.docs_view = Some(i);
+            }
+            return;
+        }
+        if self.view.is_some() {
+            return;
+        }
+        if self.docs_row_area.is_some_and(hit) {
+            if self.docs_selected() {
+                self.open();
+            } else {
+                self.selected = Some(Sel::Docs);
+            }
+            return;
+        }
+        if !hit(self.list_area) {
+            return;
+        }
+        let Some(&item) = self.items.get(self.list_scroll + (row - self.list_area.y) as usize) else { return };
+        match item {
+            Item::File(..) => {
+                let key = self.key(item);
+                if key.is_some() && key == self.selected {
+                    self.open();
+                } else {
+                    self.selected = key;
+                }
+            }
+            Item::Header(g) | Item::Pr(g) | Item::Empty(g) => {
+                let first = self.files().find(|&i| matches!(i, Item::File(fg, _) if fg == g));
+                if let Some(first) = first {
+                    self.selected = self.key(first);
+                }
+                if matches!(item, Item::Pr(_)) {
+                    self.open_pr_of(Some(g));
+                }
+            }
+        }
     }
 
     pub fn move_doc(&mut self, delta: isize) {
@@ -458,4 +531,49 @@ fn wrap(segs: &[diff::Seg], width: usize) -> Vec<Vec<diff::Seg>> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::Status;
+
+    fn app_with_two_files() -> App {
+        let file = |path: &str| FileChange { path: path.into(), old_path: None, status: Status::Modified, added: Some(1), deleted: Some(0) };
+        let tree = Tree {
+            root: PathBuf::from("/nowhere"),
+            repo: "repo".into(),
+            branch: "feature/x".into(),
+            base: "origin/main".into(),
+            merge_base: "HEAD".into(),
+            head: None,
+            files: vec![file("a.rs"), file("b.rs")],
+        };
+        let group = Group { root: tree.root.clone(), tree: Ok(tree), pr: None };
+        let mut app = App::new();
+        app.apply(Snapshot { label: None, current: None, groups: vec![group], docs: None, review: false });
+        app.list_area = Rect { x: 0, y: 1, width: 80, height: 10 };
+        app
+    }
+
+    #[test]
+    fn a_click_selects_and_a_second_click_opens() {
+        let mut app = app_with_two_files();
+        // Rows: header (y=1), PR line (y=2), a.rs (y=3), b.rs (y=4).
+        app.click(5, 4);
+        assert_eq!(app.selected, Some(Sel::File(PathBuf::from("/nowhere"), "b.rs".into())));
+        assert!(app.view.is_none());
+        app.click(5, 4);
+        assert_eq!(app.view.as_ref().map(|v| v.file.path.as_str()), Some("b.rs"));
+    }
+
+    #[test]
+    fn a_click_outside_the_list_does_nothing() {
+        let mut app = app_with_two_files();
+        let before = app.selected.clone();
+        app.click(5, 0);
+        app.click(5, 30);
+        assert_eq!(app.selected, before);
+        assert!(app.view.is_none());
+    }
 }

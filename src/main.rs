@@ -6,6 +6,7 @@ mod diff;
 mod docs;
 mod git;
 mod pr;
+mod review;
 mod source;
 mod ui;
 mod worker;
@@ -13,7 +14,11 @@ mod worker;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
+};
+use ratatui::crossterm::execute;
 
 use app::App;
 use source::Source;
@@ -51,6 +56,7 @@ fn main() -> anyhow::Result<()> {
     std::thread::spawn(diff::warm_up);
 
     let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let mut app = App::new();
     let result = (|| -> anyhow::Result<()> {
         loop {
@@ -61,13 +67,18 @@ fn main() -> anyhow::Result<()> {
             if !event::poll(Duration::from_millis(100))? {
                 continue;
             }
-            if let Event::Key(key) = event::read()? {
-                if key.kind != KeyEventKind::Release && !handle(&mut app, key, terminal.size()?.height, &poke_tx) {
-                    return Ok(());
+            match event::read()? {
+                Event::Key(key) => {
+                    if key.kind != KeyEventKind::Release && !handle(&mut app, key, terminal.size()?.height, &poke_tx) {
+                        return Ok(());
+                    }
                 }
+                Event::Mouse(mouse) => handle_mouse(&mut app, mouse),
+                _ => {}
             }
         }
     })();
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -140,6 +151,23 @@ fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<worker:
     true
 }
 
+/// The wheel scrolls the diff, or moves the selection in a list; a click selects, a second opens.
+fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    let delta = match mouse.kind {
+        MouseEventKind::ScrollDown => 1,
+        MouseEventKind::ScrollUp => -1,
+        MouseEventKind::Down(MouseButton::Left) => return app.click(mouse.column, mouse.row),
+        _ => return,
+    };
+    if app.docs_view.is_some() {
+        app.move_doc(delta);
+    } else if let Some(view) = app.view.as_mut() {
+        view.scroll_by(3 * delta);
+    } else {
+        app.move_by(delta);
+    }
+}
+
 /// `vaglio --snapshot 100x30 KEYS [PATH...]`: draws one frame after the keys into a test backend
 /// and prints it with ANSI colours. For checking the drawing without a terminal.
 fn snapshot(args: &[String]) -> anyhow::Result<()> {
@@ -149,18 +177,17 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
     let (size, keys) = (args.first().map_or("100x30", String::as_str), args.get(1).cloned().unwrap_or_default());
     let (w, h) = size.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).unwrap_or((100, 30));
     let source = Source::from_env(args.iter().skip(2).cloned().collect());
-    let found = source.roots();
-    let groups = found
-        .list
-        .into_iter()
-        .map(|root| {
-            let tree = git::load(&root).map_err(|e| e.to_string());
-            let pr = tree.as_ref().ok().map(|t| pr::lookup(&root, &t.branch));
-            app::Group { tree, root, pr }
+    let (targets, current, review) = worker::targets(&source, &mut None, false);
+    let groups = targets
+        .iter()
+        .map(|target| {
+            let mut group = worker::load_group(target);
+            group.pr = group.tree.as_ref().ok().map(|t| pr::lookup(&group.root, &t.branch));
+            group
         })
         .collect();
     let mut app = App::new();
-    app.apply(app::Snapshot { label: source.label(), current: found.current, groups, docs: source.docs() });
+    app.apply(app::Snapshot { label: source.label(), current, groups, docs: source.docs(), review });
     let mut terminal = ratatui::Terminal::new(TestBackend::new(w, h))?;
     let (tx, _rx) = mpsc::channel();
     terminal.draw(|f| ui::draw(f, &mut app))?;
