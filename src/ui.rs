@@ -135,12 +135,7 @@ fn split_line(mut left: Vec<Span<'static>>, right: Vec<Span<'static>>, total: u1
 fn list_title(app: &App, w: u16) -> Line<'static> {
     let name = app.label.clone().unwrap_or_else(|| "vaglio".into());
     let n = app.file_count();
-    let mut right = Vec::new();
-    if app.current.is_some() {
-        right.push(Span::styled("● ", Style::new().fg(GREEN)));
-        right.push(Span::styled("questa chat   ", Style::new().fg(DIM)));
-    }
-    right.push(Span::styled(format!("{n} file "), Style::new().fg(DIM)));
+    let right = vec![Span::styled(format!("{n} file "), Style::new().fg(DIM))];
     split_line(
         vec![Span::styled(format!(" {name}"), Style::new().fg(TEXT).add_modifier(Modifier::BOLD))],
         right,

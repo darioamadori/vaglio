@@ -80,8 +80,7 @@ path per line, and redraws whenever either changes:
 ~/.local/state/herdr/plugins/dario.compri-layout/spaces/<workspace id>  # every chat's, in the workspace
 ```
 
-The tab's worktree comes first, marked `●` (the header's `● questa chat` is the legend), and
-is where the selection lands; when the chat
+The tab's worktree comes first, marked `●`, and is where the selection lands; when the chat
 moves to another worktree, vaglio moves with it. The rest of the workspace follows, so a task
 spread over several repos (say a backend and a frontend for one ticket) is one list, one group
 per repo. With neither file naming a worktree, vaglio shows the repo the pane was opened in:
