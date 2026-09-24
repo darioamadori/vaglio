@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use unicode_width::UnicodeWidthChar;
 
 use crate::diff::{self, Kind, Row};
+use crate::docs::Doc;
 use crate::git::{self, FileChange, Tree};
 use crate::pr::PrStatus;
 
@@ -21,6 +22,16 @@ pub struct Snapshot {
     /// The worktree this tab's chat is in.
     pub current: Option<PathBuf>,
     pub groups: Vec<Group>,
+    /// The workspace's design documents; `None` when vaglio runs outside herdr.
+    pub docs: Option<Vec<Doc>>,
+}
+
+/// What the cursor is on: a file, or the design documents row pinned under the list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Sel {
+    /// Kept as root + path so a refresh that reorders the list does not move it.
+    File(PathBuf, String),
+    Docs,
 }
 
 /// One line of the file list.
@@ -39,10 +50,12 @@ pub struct App {
     pub current: Option<PathBuf>,
     pub groups: Vec<Group>,
     pub items: Vec<Item>,
-    /// Kept as root + path so a refresh that reorders the list does not move it.
-    pub selected: Option<(PathBuf, String)>,
+    pub selected: Option<Sel>,
     pub list_scroll: usize,
     pub view: Option<DiffView>,
+    pub docs: Option<Vec<Doc>>,
+    /// The design documents list, open, with the index of the selected one.
+    pub docs_view: Option<usize>,
     pub loaded: bool,
     /// A short message in the footer, such as what `p` did.
     pub flash: Option<(String, std::time::Instant)>,
@@ -50,7 +63,19 @@ pub struct App {
 
 impl App {
     pub fn new() -> App {
-        App { label: None, current: None, groups: Vec::new(), items: Vec::new(), selected: None, list_scroll: 0, view: None, loaded: false, flash: None }
+        App {
+            label: None,
+            current: None,
+            groups: Vec::new(),
+            items: Vec::new(),
+            selected: None,
+            list_scroll: 0,
+            view: None,
+            docs: None,
+            docs_view: None,
+            loaded: false,
+            flash: None,
+        }
     }
 
     pub fn tree(&self, g: usize) -> Option<&Tree> {
@@ -70,6 +95,12 @@ impl App {
         let moved = snap.current.is_some() && snap.current != self.current;
         self.current = snap.current;
         self.groups = snap.groups;
+        self.docs = snap.docs;
+        match (&self.docs, self.docs_view) {
+            (None, _) => self.docs_view = None,
+            (Some(docs), Some(i)) => self.docs_view = Some(i.min(docs.len().saturating_sub(1))),
+            _ => {}
+        }
         self.items.clear();
         for (g, group) in self.groups.iter().enumerate() {
             self.items.push(Item::Header(g));
@@ -88,7 +119,7 @@ impl App {
             self.selected = first.and_then(|i| self.key(i));
             self.list_scroll = 0;
         }
-        if self.selected_index().is_none() {
+        if !self.selection_valid() {
             let first = self.files().next();
             self.selected = first.and_then(|i| self.key(i));
         }
@@ -111,16 +142,38 @@ impl App {
         }
     }
 
-    fn key(&self, item: Item) -> Option<(PathBuf, String)> {
-        self.file(item).map(|(t, f)| (t.root.clone(), f.path.clone()))
+    fn key(&self, item: Item) -> Option<Sel> {
+        self.file(item).map(|(t, f)| Sel::File(t.root.clone(), f.path.clone()))
     }
 
     fn files(&self) -> impl Iterator<Item = Item> + '_ {
         self.items.iter().copied().filter(|i| matches!(i, Item::File(..)))
     }
 
+    /// Everything the cursor can stop on, top to bottom: the files, then the documents row.
+    fn stops(&self) -> Vec<Sel> {
+        let mut stops: Vec<Sel> = self.files().filter_map(|i| self.key(i)).collect();
+        if self.docs.is_some() {
+            stops.push(Sel::Docs);
+        }
+        stops
+    }
+
+    fn selection_valid(&self) -> bool {
+        match &self.selected {
+            Some(Sel::Docs) => self.docs.is_some(),
+            Some(Sel::File(..)) => self.selected_index().is_some(),
+            None => false,
+        }
+    }
+
+    pub fn docs_selected(&self) -> bool {
+        self.selected == Some(Sel::Docs)
+    }
+
+    /// The selected file's line in the list.
     pub fn selected_index(&self) -> Option<usize> {
-        let (root, path) = self.selected.as_ref()?;
+        let Some(Sel::File(root, path)) = self.selected.as_ref() else { return None };
         self.items.iter().position(|&i| self.file(i).is_some_and(|(t, f)| &t.root == root && &f.path == path))
     }
 
@@ -128,15 +181,16 @@ impl App {
         self.files().count()
     }
 
-    /// Moves the selection by `delta` files, skipping headers.
+    /// Moves the selection by `delta` files, skipping headers; past the last file is the
+    /// documents row.
     pub fn move_by(&mut self, delta: isize) {
-        let files: Vec<Item> = self.files().collect();
-        if files.is_empty() {
+        let stops = self.stops();
+        if stops.is_empty() {
             return;
         }
-        let at = self.selected_index().and_then(|i| files.iter().position(|&f| f == self.items[i])).unwrap_or(0);
-        let next = (at as isize + delta).clamp(0, files.len() as isize - 1) as usize;
-        self.selected = self.key(files[next]);
+        let at = self.selected.as_ref().and_then(|s| stops.iter().position(|x| x == s)).unwrap_or(0);
+        let next = (at as isize + delta).clamp(0, stops.len() as isize - 1) as usize;
+        self.selected = Some(stops[next].clone());
     }
 
     pub fn select_edge(&mut self, last: bool) {
@@ -146,6 +200,10 @@ impl App {
     }
 
     pub fn open(&mut self) {
+        if self.docs_selected() {
+            self.docs_view = Some(0);
+            return;
+        }
         let Some(i) = self.selected_index() else { return };
         let Some((tree, file)) = self.file(self.items[i]) else { return };
         let (full, wrap) = self.view.as_ref().map_or((true, true), |v| (v.full, v.wrap));
@@ -158,8 +216,8 @@ impl App {
     fn current_group(&self) -> Option<&Group> {
         let root = match (&self.view, &self.selected) {
             (Some(view), _) => &view.root,
-            (None, Some((root, _))) => root,
-            (None, None) => return self.groups.first(),
+            (None, Some(Sel::File(root, _))) => root,
+            (None, _) => return self.groups.first(),
         };
         self.groups.iter().find(|g| &g.root == root)
     }
@@ -186,12 +244,15 @@ impl App {
         self.flash = Some((msg, std::time::Instant::now()));
     }
 
-    /// Copies the path of the selected (or open) file, relative to its worktree.
+    /// Copies the path of the selected (or open) file, relative to its worktree; in the
+    /// documents list, the selected document's link or path.
     pub fn copy_path(&mut self) {
+        let doc = self.docs_view.and_then(|i| self.docs.as_ref()?.get(i)).map(|d| d.target.clone());
         let path = match (&self.view, &self.selected) {
+            _ if doc.is_some() => doc,
             (Some(view), _) => Some(view.file.path.clone()),
-            (None, Some((_, path))) => Some(path.clone()),
-            (None, None) => None,
+            (None, Some(Sel::File(_, path))) => Some(path.clone()),
+            (None, _) => None,
         };
         let msg = match path {
             None => "nessun file selezionato".to_string(),
@@ -219,7 +280,27 @@ impl App {
     /// Opens the next or previous file without going back to the list.
     pub fn step_file(&mut self, delta: isize) {
         self.move_by(delta);
+        if self.docs_selected() {
+            self.move_by(-1);
+        }
         self.open();
+    }
+
+    pub fn move_doc(&mut self, delta: isize) {
+        let (Some(i), Some(docs)) = (self.docs_view, &self.docs) else { return };
+        let last = docs.len().saturating_sub(1) as isize;
+        self.docs_view = Some((i as isize + delta).clamp(0, last) as usize);
+    }
+
+    /// Opens the selected document in its own app.
+    pub fn open_doc(&mut self) {
+        let (Some(i), Some(docs)) = (self.docs_view, &self.docs) else { return };
+        let Some(doc) = docs.get(i) else { return };
+        let msg = match crate::docs::open(doc) {
+            Ok(()) => format!("aperto {}", doc.title),
+            Err(e) => e,
+        };
+        self.flash = Some((msg, std::time::Instant::now()));
     }
 }
 

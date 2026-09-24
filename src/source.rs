@@ -5,7 +5,8 @@
 //! yazi follows too), and append every worktree any chat of the workspace works in to
 //! `<state>/spaces/<workspace id>`. The tab's worktree comes first and is where the selection
 //! lands; the rest of the workspace follows, for a task spread over several repos. With neither,
-//! vaglio shows the repo the pane was opened in, usually a main checkout on `main`.
+//! vaglio shows the repo the pane was opened in, usually a main checkout on `main`. The design
+//! documents the workspace's chats wrote are listed in `<state>/docs/<workspace id>` (see `docs`).
 //!
 //! Paths given on the command line replace all of that. Outside herdr, with no paths, vaglio
 //! shows the repo it was started in.
@@ -30,7 +31,7 @@ fn state_dir() -> PathBuf {
 #[derive(Clone, Debug)]
 pub enum Source {
     Paths(Vec<PathBuf>),
-    Workspace { id: String, tab: Option<PathBuf>, space: PathBuf, cwd: PathBuf },
+    Workspace { id: String, tab: Option<PathBuf>, space: PathBuf, docs: PathBuf, cwd: PathBuf },
     Cwd(PathBuf),
 }
 
@@ -44,9 +45,10 @@ impl Source {
             Ok(id) if !id.is_empty() => {
                 let state = state_dir();
                 let space = state.join("spaces").join(id.replace(':', "_"));
+                let docs = state.join("docs").join(id.replace(':', "_"));
                 let tab = std::env::var("HERDR_TAB_ID").ok().filter(|t| !t.is_empty());
                 let tab = tab.map(|t| state.join("tabs").join(t.replace(':', "_")));
-                Source::Workspace { id, tab, space, cwd }
+                Source::Workspace { id, tab, space, docs, cwd }
             }
             _ => Source::Cwd(cwd),
         }
@@ -55,7 +57,7 @@ impl Source {
     /// The state files to watch besides the worktrees themselves.
     pub fn state_files(&self) -> Vec<PathBuf> {
         match self {
-            Source::Workspace { tab, space, .. } => tab.iter().chain([space]).cloned().collect(),
+            Source::Workspace { tab, space, docs, .. } => tab.iter().chain([space, docs]).cloned().collect(),
             _ => Vec::new(),
         }
     }
@@ -80,6 +82,12 @@ impl Source {
             }
         }
         roots
+    }
+
+    /// The workspace's design documents; `None` outside herdr, where there is no list to read.
+    pub fn docs(&self) -> Option<Vec<crate::docs::Doc>> {
+        let Source::Workspace { docs, .. } = self else { return None };
+        Some(crate::docs::read(docs))
     }
 
     /// The herdr workspace label, for the header.

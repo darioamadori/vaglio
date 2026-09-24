@@ -8,6 +8,7 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, DiffView, Item};
+use crate::docs::{self, Kind as DocKind};
 use crate::diff::Kind;
 use crate::git::Status;
 use crate::pr::PrStatus;
@@ -36,7 +37,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let flash = app.flash.as_ref().map(|(msg, _)| Line::from(Span::styled(format!(" {msg}"), Style::new().fg(YELLOW))));
     let body = Rect { y: area.y + 1, height: area.height - 2, ..area };
     let footer = Rect { y: area.bottom() - 1, height: 1, ..area };
-    if let Some(view) = app.view.as_mut() {
+    if app.docs_view.is_some() {
+        f.render_widget(Paragraph::new(docs_title(app, area.width)), Rect { height: 1, ..area });
+        draw_docs(f, app, body);
+        let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("y", "copia link"), ("esc", "lista")]);
+        f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
+    } else if let Some(view) = app.view.as_mut() {
         view.layout(body.width, body.height);
         let view = app.view.as_ref().unwrap();
         f.render_widget(Paragraph::new(diff_title(view, area.width)), Rect { height: 1, ..area });
@@ -54,7 +60,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     } else {
         f.render_widget(Paragraph::new(list_title(app, area.width)), Rect { height: 1, ..area });
-        draw_list(f, app, body);
+        // The documents row sits at the foot of the pane, whatever the list's length.
+        let list = if app.docs.is_some() && body.height > 2 {
+            let row = Rect { y: body.bottom() - 1, height: 1, ..body };
+            f.render_widget(Paragraph::new(docs_row(app, area.width)), row);
+            Rect { height: body.height - 2, ..body }
+        } else {
+            body
+        };
+        draw_list(f, app, list);
         let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("p", "PR"), ("y", "copia path"), ("r", "aggiorna"), ("q", "esci")]);
         f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     }
@@ -288,6 +302,67 @@ fn pr_line(status: Option<&PrStatus>, w: u16) -> Line<'static> {
             )
         }
     }
+}
+
+fn docs_row(app: &App, w: u16) -> Line<'static> {
+    let n = app.docs.as_ref().map_or(0, Vec::len);
+    let selected = app.docs_selected();
+    let left = vec![
+        Span::styled(if selected { " ›" } else { "  " }, Style::new().fg(BLUE)),
+        Span::styled(" design doc ", Style::new().fg(TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" {n} "), Style::new().fg(if n > 0 { YELLOW } else { DIM }).add_modifier(Modifier::BOLD)),
+    ];
+    let right = if selected { vec![Span::styled("⏎ lista ", Style::new().fg(DIM))] } else { Vec::new() };
+    split_line(left, right, w, selected.then_some(SELECTED_BG))
+}
+
+fn docs_title(app: &App, w: u16) -> Line<'static> {
+    let n = app.docs.as_ref().map_or(0, Vec::len);
+    split_line(
+        vec![Span::styled(" design doc", Style::new().fg(TEXT).add_modifier(Modifier::BOLD))],
+        vec![Span::styled(format!("{n} "), Style::new().fg(DIM))],
+        w,
+        None,
+    )
+}
+
+fn draw_docs(f: &mut Frame, app: &App, area: Rect) {
+    let docs = app.docs.as_deref().unwrap_or_default();
+    if docs.is_empty() {
+        let msg = vec![
+            Line::from(Span::styled(" nessun documento in questo workspace", Style::new().fg(DIM))),
+            Line::from(Span::styled(" compare quando Claude pubblica un artifact, crea una pagina Notion", Style::new().fg(DIM))),
+            Line::from(Span::styled(" o un Claude Doc, o scrive un file .md", Style::new().fg(DIM))),
+        ];
+        f.render_widget(Paragraph::new(msg), area);
+        return;
+    }
+    let sel = app.docs_view.unwrap_or(0);
+    let height = area.height as usize;
+    let top = sel.saturating_sub(height.saturating_sub(1));
+    let lines: Vec<Line> = docs
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(height)
+        .map(|(i, doc)| {
+            let selected = i == sel;
+            let color = match doc.kind {
+                DocKind::Artifact => BLUE,
+                DocKind::Notion => TEXT,
+                DocKind::ClaudeDoc => MAGENTA,
+                DocKind::Markdown => YELLOW,
+            };
+            let left = vec![
+                Span::styled(if selected { " ›" } else { "  " }, Style::new().fg(BLUE)),
+                Span::styled(format!(" {:<8} ", doc.kind.label()), Style::new().fg(color)),
+                Span::styled(doc.title.clone(), Style::new().fg(TEXT)),
+            ];
+            let right = vec![Span::styled(format!("{} ", docs::age(doc.at)), Style::new().fg(DIM))];
+            split_line(left, right, area.width, selected.then_some(SELECTED_BG))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), area);
 }
 
 fn diff_title(view: &DiffView, w: u16) -> Line<'static> {
