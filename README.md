@@ -80,15 +80,17 @@ path per line, and redraws whenever either changes:
 ~/.local/state/herdr/plugins/dario.compri-layout/spaces/<workspace id>  # every chat's, in the workspace
 ```
 
-The tab's worktree comes first, marked `●`, and is where the selection lands; when the chat
+The tab's worktree comes first, marked `●` (the header's `● questa chat` is the legend), and
+is where the selection lands; when the chat
 moves to another worktree, vaglio moves with it. The rest of the workspace follows, so a task
 spread over several repos (say a backend and a frontend for one ticket) is one list, one group
-per repo. With neither file naming a worktree, vaglio shows the repo the pane was opened in,
-labelled *clone principale*: usually a main checkout on `main`, with whatever is uncommitted
-there. Switching branch inside a worktree needs nothing: the header follows within seconds.
+per repo. With neither file naming a worktree, vaglio shows the repo the pane was opened in:
+usually a main checkout on `main`, with whatever is uncommitted there. Switching branch inside a worktree needs nothing: the header follows within seconds.
 
-Whatever writes those files decides what shows. In my setup it is a Claude Code `PostToolUse`
-hook that spots a worktree path in the files a chat edits and the commands it runs. A worktree
+Whatever writes those files decides what shows. In my setup it is a Claude Code hook that
+moves the tab only at the edges of a turn: when the prompt names a branch or ticket, and at
+`Stop`, to the last worktree the chat actually worked in (an edit, a git write, a `cd` there).
+A chat that only peeks at another branch leaves the pane where it is. A worktree
 that is removed simply drops out. `VAGLIO_STATE_DIR` points vaglio at another state directory.
 
 ## Pull requests
@@ -101,17 +103,18 @@ refreshed every minute; <kbd>r</kbd> forces one.
 Where the pull request is looked up depends on the worktree's `origin`:
 
 - **GitHub**: through [`gh`](https://cli.github.com), with its login (`gh auth login`).
-- **Bitbucket**: through the REST API, with an Atlassian API token. Create one at
+- **Bitbucket**: through the REST API, with a token of vaglio's own: an Atlassian email and API
+  token, from `VAGLIO_BITBUCKET_USER` and `VAGLIO_BITBUCKET_TOKEN`, or from the macOS Keychain
+  item `vaglio-bitbucket`. Create the token at
   <https://id.atlassian.com/manage-profile/security/api-tokens> (*Create API token with
-  scopes*, app Bitbucket, scope `read:pullrequest:bitbucket`), then store it in the macOS
-  Keychain; `-w` last makes `security` prompt for it, so it never lands in your shell history:
+  scopes*, app Bitbucket, scope `read:pullrequest:bitbucket` only), then store it, with `-w`
+  last so `security` prompts for it and it never lands in your shell history:
 
   ```sh
   security add-generic-password -s vaglio-bitbucket -a you@example.com -w
   ```
 
-  The account is your Atlassian email. Elsewhere, set `VAGLIO_BITBUCKET_USER` and
-  `VAGLIO_BITBUCKET_TOKEN` instead. The token reaches `curl` on stdin, never on its command line.
+  The token reaches `curl` on stdin, never on its command line.
 
 ## Keys
 

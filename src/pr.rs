@@ -1,8 +1,8 @@
 //! The pull request of a worktree's branch, looked up where its `origin` lives.
 //!
-//! Bitbucket needs an API token: from the macOS Keychain (generic password, service
-//! `vaglio-bitbucket`, account = the Atlassian email) or from `VAGLIO_BITBUCKET_USER` and
-//! `VAGLIO_BITBUCKET_TOKEN`. GitHub goes through `gh`, with whatever login it has.
+//! Bitbucket needs an Atlassian email and API token of its own: from `VAGLIO_BITBUCKET_USER` +
+//! `VAGLIO_BITBUCKET_TOKEN`, or from the macOS Keychain item `vaglio-bitbucket` (account = the
+//! email, password = the token). GitHub goes through `gh`, with whatever login it has.
 
 use std::io::Write;
 use std::path::Path;
