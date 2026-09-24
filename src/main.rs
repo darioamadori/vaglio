@@ -23,13 +23,21 @@ Mostra i file che ogni worktree ha cambiato rispetto al branch di integrazione
 (origin/develop se esiste, altrimenti origin/main), con il diff di ciascuno.
 
 Senza argomenti, dentro herdr segue il workspace (lista scritta dal plugin
-compri-layout); fuori da herdr mostra il repo della directory corrente.";
+compri-layout); fuori da herdr mostra il repo della directory corrente.
+
+vaglio --check-token [PATH]   prova il token Bitbucket sul repo di PATH (default: qui)";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");
         return Ok(());
+    }
+    if args.first().is_some_and(|a| a == "--check-token") {
+        let dir = args.get(1).map_or_else(|| std::env::current_dir().unwrap_or_default(), std::path::PathBuf::from);
+        let (ok, msg) = pr::check_token(&dir);
+        println!("{msg}");
+        std::process::exit(if ok { 0 } else { 1 });
     }
     if args.first().is_some_and(|a| a == "--snapshot") {
         return snapshot(&args[1..]);
