@@ -161,6 +161,23 @@ fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
     }
 }
 
+/// The same request a lookup makes, on a branch name no pull request has, so only the
+/// credentials decide the outcome. Never prints the token.
+pub fn check_token(dir: &Path) -> (bool, String) {
+    let Some(root) = crate::git::toplevel(dir) else { return (false, format!("{} non è un repo git", dir.display())) };
+    let Some(Host::Bitbucket { workspace, repo }) = host(&root) else {
+        return (false, format!("{}: origin non è su Bitbucket", root.display()));
+    };
+    match bitbucket(&workspace, &repo, "vaglio-check-token") {
+        PrStatus::Missing { .. } | PrStatus::Found(_) => (true, format!("token ok: legge le PR di {workspace}/{repo}")),
+        PrStatus::NoCredentials => {
+            (false, format!("nessun token: manca l'elemento {KEYCHAIN_SERVICE} nel portachiavi (o VAGLIO_BITBUCKET_USER/TOKEN)"))
+        }
+        PrStatus::Error(e) => (false, e),
+        other => (false, format!("{other:?}")),
+    }
+}
+
 fn github(root: &Path, owner: &str, repo: &str, branch: &str) -> PrStatus {
     let new_url = format!("https://github.com/{owner}/{repo}/pull/new/{branch}");
     let out = Command::new("gh")

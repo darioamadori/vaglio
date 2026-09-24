@@ -113,7 +113,11 @@ Where the pull request is looked up depends on the worktree's `origin`:
   security add-generic-password -s vaglio-bitbucket -a you@example.com -w
   ```
 
-  The token reaches `curl` on stdin, never on its command line.
+  The token reaches `curl` on stdin, never on its command line. To try it without opening the
+  pane, run `vaglio --check-token` inside any clone whose `origin` is on Bitbucket: it prints
+  `token ok`, or why Bitbucket refused it (a 401 is a wrong email or token, a 403 names the
+  missing scope). If a 403 asks for `read:repository:bitbucket`, add that one too, and nothing
+  else.
 
 ## Keys
 
