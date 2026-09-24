@@ -53,10 +53,13 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
         .ok()
     };
     let mut watched: Vec<PathBuf> = Vec::new();
-    if let (Some(w), Some(file)) = (watcher.as_mut(), source.list_file()) {
-        if let Some(dir) = file.parent() {
-            let _ = std::fs::create_dir_all(dir);
-            let _ = w.watch(dir, RecursiveMode::NonRecursive);
+    if let Some(w) = watcher.as_mut() {
+        // The directories, not the files: the hook replaces them, and a new one must count too.
+        for file in source.state_files() {
+            if let Some(dir) = file.parent() {
+                let _ = std::fs::create_dir_all(dir);
+                let _ = w.watch(dir, RecursiveMode::NonRecursive);
+            }
         }
     }
 
@@ -64,7 +67,8 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
     let mut label_at: Option<Instant> = None;
     let mut prs: HashMap<(PathBuf, String), (Instant, PrStatus)> = HashMap::new();
     loop {
-        let roots = source.roots();
+        let found = source.roots();
+        let (roots, current) = (found.list, found.current);
         if let Some(w) = watcher.as_mut() {
             for gone in watched.iter().filter(|p| !roots.contains(p)) {
                 let _ = w.unwatch(gone);
@@ -87,7 +91,7 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
                 Group { tree, root, pr }
             })
             .collect();
-        if out.send(Snapshot { label: label.clone(), groups: groups.clone() }).is_err() {
+        if out.send(Snapshot { label: label.clone(), current: current.clone(), groups: groups.clone() }).is_err() {
             return;
         }
 
@@ -103,7 +107,7 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
             group.pr = Some(status);
             looked_up = true;
         }
-        if looked_up && out.send(Snapshot { label: label.clone(), groups }).is_err() {
+        if looked_up && out.send(Snapshot { label: label.clone(), current: current.clone(), groups }).is_err() {
             return;
         }
 

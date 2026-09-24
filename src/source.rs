@@ -1,9 +1,13 @@
 //! Which worktrees vaglio shows.
 //!
-//! Inside herdr it follows the workspace: the `compri-layout` plugin and its `follow.sh` hook
-//! append every worktree Claude works in to `<state>/spaces/<workspace id>`, one path per line,
-//! so every chat of the workspace adds to the same list; until one does, the list is empty.
-//! Paths given on the command line replace that list. Outside herdr, with no paths, vaglio
+//! Inside herdr it follows the chat of its tab. The `compri-layout` plugin and its `follow.sh`
+//! hook write the worktree that tab's Claude is working in to `<state>/tabs/<tab id>` (the file
+//! yazi follows too), and append every worktree any chat of the workspace works in to
+//! `<state>/spaces/<workspace id>`. The tab's worktree comes first and is where the selection
+//! lands; the rest of the workspace follows, for a task spread over several repos. With neither,
+//! vaglio shows the repo the pane was opened in, usually a main checkout on `main`.
+//!
+//! Paths given on the command line replace all of that. Outside herdr, with no paths, vaglio
 //! shows the repo it was started in.
 
 use std::path::PathBuf;
@@ -26,7 +30,7 @@ fn state_dir() -> PathBuf {
 #[derive(Clone, Debug)]
 pub enum Source {
     Paths(Vec<PathBuf>),
-    Workspace { id: String, file: PathBuf, cwd: PathBuf },
+    Workspace { id: String, tab: Option<PathBuf>, space: PathBuf, cwd: PathBuf },
     Cwd(PathBuf),
 }
 
@@ -38,49 +42,43 @@ impl Source {
         }
         match std::env::var("HERDR_WORKSPACE_ID") {
             Ok(id) if !id.is_empty() => {
-                let file = state_dir().join("spaces").join(id.replace(':', "_"));
-                Source::Workspace { id, file, cwd }
+                let state = state_dir();
+                let space = state.join("spaces").join(id.replace(':', "_"));
+                let tab = std::env::var("HERDR_TAB_ID").ok().filter(|t| !t.is_empty());
+                let tab = tab.map(|t| state.join("tabs").join(t.replace(':', "_")));
+                Source::Workspace { id, tab, space, cwd }
             }
             _ => Source::Cwd(cwd),
         }
     }
 
-    /// The file to watch besides the worktrees themselves.
-    pub fn list_file(&self) -> Option<&PathBuf> {
+    /// The state files to watch besides the worktrees themselves.
+    pub fn state_files(&self) -> Vec<PathBuf> {
         match self {
-            Source::Workspace { file, .. } => Some(file),
-            _ => None,
+            Source::Workspace { tab, space, .. } => tab.iter().chain([space]).cloned().collect(),
+            _ => Vec::new(),
         }
     }
 
-    pub fn roots(&self) -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        let mut push = |p: PathBuf| {
-            if !roots.contains(&p) {
-                roots.push(p);
-            }
-        };
+    pub fn roots(&self) -> Roots {
+        let mut roots = Roots::default();
         match self {
-            Source::Paths(paths) => paths.iter().filter_map(|p| crate::git::toplevel(p)).for_each(&mut push),
-            Source::Cwd(cwd) => crate::git::toplevel(cwd).into_iter().for_each(&mut push),
-            Source::Workspace { file, cwd, .. } => {
-                // A pane opened straight on a worktree counts even before the list names it.
-                if let Some(top) = crate::git::toplevel(cwd).filter(|t| t.starts_with(worktrees_dir())) {
-                    push(top);
+            Source::Paths(paths) => paths.iter().filter_map(|p| crate::git::toplevel(p)).for_each(|p| roots.push(p)),
+            Source::Cwd(cwd) => roots.list.extend(crate::git::toplevel(cwd)),
+            Source::Workspace { tab, space, cwd, .. } => {
+                let tab_wt = tab.as_ref().and_then(|f| read_list(f).into_iter().next());
+                // A pane opened straight on a worktree is that chat's until the hook says otherwise.
+                let own = tab_wt.or_else(|| crate::git::toplevel(cwd).filter(|t| t.starts_with(worktrees_dir())));
+                if let Some(own) = own {
+                    roots.current = Some(own.clone());
+                    roots.push(own);
                 }
-                // A worktree removed since it was listed just drops out.
-                std::fs::read_to_string(file)
-                    .unwrap_or_default()
-                    .lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                    .map(PathBuf::from)
-                    .filter(|p| p.join(".git").exists())
-                    .for_each(&mut push);
+                read_list(space).into_iter().for_each(|p| roots.push(p));
+                if roots.list.is_empty() {
+                    roots.list.extend(crate::git::toplevel(cwd));
+                }
             }
         }
-        // No fallback to the pane's own repo: in herdr that is a main checkout, whose leftovers
-        // (an eval's output, a stray file) are not the work of this workspace.
         roots
     }
 
@@ -97,4 +95,31 @@ impl Source {
             .as_str()
             .map(str::to_string)
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Roots {
+    pub list: Vec<PathBuf>,
+    /// The worktree this tab's chat is working in, when it has one.
+    pub current: Option<PathBuf>,
+}
+
+impl Roots {
+    fn push(&mut self, p: PathBuf) {
+        if !self.list.contains(&p) {
+            self.list.push(p);
+        }
+    }
+}
+
+/// A state file's paths, one per line; worktrees removed since they were written drop out.
+fn read_list(file: &PathBuf) -> Vec<PathBuf> {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.join(".git").exists())
+        .collect()
 }

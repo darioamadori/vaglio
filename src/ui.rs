@@ -48,13 +48,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             ("w", "a capo"),
             ("[/]", "file"),
             ("p", "PR"),
+            ("y", "copia path"),
             ("esc", "lista"),
         ]);
         f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     } else {
         f.render_widget(Paragraph::new(list_title(app, area.width)), Rect { height: 1, ..area });
         draw_list(f, app, body);
-        let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("p", "PR"), ("r", "aggiorna"), ("q", "esci")]);
+        let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("p", "PR"), ("y", "copia path"), ("r", "aggiorna"), ("q", "esci")]);
         f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     }
 }
@@ -210,10 +211,15 @@ fn list_line(app: &App, item: Item, selected: bool, w: u16) -> Line<'static> {
             match &group.tree {
                 Ok(t) => {
                     let (a, d) = t.totals();
+                    let own = app.current.as_ref() == Some(&t.root);
                     let mut left = vec![
-                        Span::styled(format!(" {}", t.repo), Style::new().fg(BLUE).add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("  {}", t.branch), Style::new().fg(MAGENTA)),
+                        Span::styled(if own { " ● " } else { "   " }, Style::new().fg(GREEN)),
+                        Span::styled(t.repo.clone(), Style::new().fg(BLUE).add_modifier(Modifier::BOLD)),
+                        Span::styled(format!("  {}", t.branch), Style::new().fg(MAGENTA).add_modifier(Modifier::BOLD)),
                     ];
+                    if !t.root.starts_with(crate::source::worktrees_dir()) {
+                        left.push(Span::styled("  clone principale", Style::new().fg(DIM)));
+                    }
                     if !t.base.ends_with("main") {
                         left.push(Span::styled(format!("  vs {}", t.base), Style::new().fg(DIM)));
                     }

@@ -1,6 +1,7 @@
 //! vaglio: the files a task changed, per worktree, against the branch they will merge into.
 
 mod app;
+mod clipboard;
 mod diff;
 mod git;
 mod pr;
@@ -69,9 +70,16 @@ fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<worker:
         return false;
     }
     let page = height.saturating_sub(2).max(1) as isize;
-    if key.code == KeyCode::Char('p') {
-        app.open_pr();
-        return true;
+    match key.code {
+        KeyCode::Char('p') => {
+            app.open_pr();
+            return true;
+        }
+        KeyCode::Char('y') => {
+            app.copy_path();
+            return true;
+        }
+        _ => {}
     }
     if let Some(view) = app.view.as_mut() {
         match key.code {
@@ -120,8 +128,9 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
     let (size, keys) = (args.first().map_or("100x30", String::as_str), args.get(1).cloned().unwrap_or_default());
     let (w, h) = size.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))).unwrap_or((100, 30));
     let source = Source::from_env(args.iter().skip(2).cloned().collect());
-    let groups = source
-        .roots()
+    let found = source.roots();
+    let groups = found
+        .list
         .into_iter()
         .map(|root| {
             let tree = git::load(&root).map_err(|e| e.to_string());
@@ -130,7 +139,7 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
         })
         .collect();
     let mut app = App::new();
-    app.apply(app::Snapshot { label: source.label(), groups });
+    app.apply(app::Snapshot { label: source.label(), current: found.current, groups });
     let mut terminal = ratatui::Terminal::new(TestBackend::new(w, h))?;
     let (tx, _rx) = mpsc::channel();
     terminal.draw(|f| ui::draw(f, &mut app))?;

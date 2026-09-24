@@ -18,6 +18,8 @@ pub struct Group {
 
 pub struct Snapshot {
     pub label: Option<String>,
+    /// The worktree this tab's chat is in.
+    pub current: Option<PathBuf>,
     pub groups: Vec<Group>,
 }
 
@@ -34,6 +36,7 @@ pub enum Item {
 
 pub struct App {
     pub label: Option<String>,
+    pub current: Option<PathBuf>,
     pub groups: Vec<Group>,
     pub items: Vec<Item>,
     /// Kept as root + path so a refresh that reorders the list does not move it.
@@ -47,7 +50,7 @@ pub struct App {
 
 impl App {
     pub fn new() -> App {
-        App { label: None, groups: Vec::new(), items: Vec::new(), selected: None, list_scroll: 0, view: None, loaded: false, flash: None }
+        App { label: None, current: None, groups: Vec::new(), items: Vec::new(), selected: None, list_scroll: 0, view: None, loaded: false, flash: None }
     }
 
     pub fn tree(&self, g: usize) -> Option<&Tree> {
@@ -63,6 +66,9 @@ impl App {
     pub fn apply(&mut self, snap: Snapshot) {
         self.loaded = true;
         self.label = snap.label;
+        // The chat moved to another worktree: follow it there, as yazi does.
+        let moved = snap.current.is_some() && snap.current != self.current;
+        self.current = snap.current;
         self.groups = snap.groups;
         self.items.clear();
         for (g, group) in self.groups.iter().enumerate() {
@@ -74,6 +80,13 @@ impl App {
                 Ok(t) if !t.files.is_empty() => self.items.extend((0..t.files.len()).map(|f| Item::File(g, f))),
                 _ => self.items.push(Item::Empty(g)),
             }
+        }
+        if moved {
+            self.view = None;
+            let root = self.current.clone();
+            let first = self.files().find(|&i| self.file(i).is_some_and(|(t, _)| Some(&t.root) == root.as_ref()));
+            self.selected = first.and_then(|i| self.key(i));
+            self.list_scroll = 0;
         }
         if self.selected_index().is_none() {
             let first = self.files().next();
@@ -168,6 +181,23 @@ impl App {
                 (None, PrStatus::NoHost) => "PR: origin non è né Bitbucket né GitHub".to_string(),
                 (None, PrStatus::Error(e)) => e.clone(),
                 (None, _) => String::new(),
+            },
+        };
+        self.flash = Some((msg, std::time::Instant::now()));
+    }
+
+    /// Copies the path of the selected (or open) file, relative to its worktree.
+    pub fn copy_path(&mut self) {
+        let path = match (&self.view, &self.selected) {
+            (Some(view), _) => Some(view.file.path.clone()),
+            (None, Some((_, path))) => Some(path.clone()),
+            (None, None) => None,
+        };
+        let msg = match path {
+            None => "nessun file selezionato".to_string(),
+            Some(path) => match crate::clipboard::copy(&path) {
+                true => format!("copiato {path}"),
+                false => "non riesco a copiare negli appunti".to_string(),
             },
         };
         self.flash = Some((msg, std::time::Instant::now()));

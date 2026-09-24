@@ -10,17 +10,17 @@ exact words that changed.
 
 ```
  PROJ-42 checkout rework                                           9 file
- api  feature/PROJ-42-checkout-rework                                 +412 −35
+ ● api  feature/PROJ-42-checkout-rework                               +412 −35
    #128 DRAFT  PROJ-42: rework checkout discounts
  › M src/checkout/cart.py                                               +48 −9
    A src/checkout/discounts.py                                            +120
    M src/checkout/payment.py                                           +61 −22
    A tests/checkout/test_discounts.py                                     +140
- web  feature/PROJ-42-checkout-ui                                       +44 −8
+   web  feature/PROJ-42-checkout-ui                                     +44 −8
    nessuna PR · p per crearla
    M app/routes/checkout.tsx                                            +30 −6
    M app/components/CartSummary.tsx                                     +14 −2
- j/k muovi · ⏎ apri · p PR · r aggiorna · q esci
+ j/k muovi · ⏎ apri · p PR · y copia path · r aggiorna · q esci
 ```
 
 Press <kbd>Enter</kbd> and the list gives way to the diff, full pane:
@@ -71,20 +71,25 @@ Quit with <kbd>q</kbd>.
 
 ### Inside herdr
 
-In a [herdr](https://herdr.dev) pane with no arguments, `vaglio` follows the **workspace**
-instead: it reads the list of worktrees at
+In a [herdr](https://herdr.dev) pane with no arguments, `vaglio` follows **the chat of its
+tab**, the same way the file manager next to it does. It reads two state files, one absolute
+path per line, and redraws whenever either changes:
 
 ```
-~/.local/state/herdr/plugins/dario.compri-layout/spaces/<workspace id>
+~/.local/state/herdr/plugins/dario.compri-layout/tabs/<tab id>          # this chat's worktree
+~/.local/state/herdr/plugins/dario.compri-layout/spaces/<workspace id>  # every chat's, in the workspace
 ```
 
-one absolute path per line, and redraws whenever that file changes. Whatever appends to it
-decides what shows. In my setup that is a Claude Code `PostToolUse` hook: every chat in the
-workspace that edits a file in a worktree adds that worktree, so work across several repos
-(say a backend and a frontend repo for one ticket) shows up as one list, one group per repo.
-A worktree that is removed simply drops out, and until the first one is added the pane says so
-rather than showing the repo it was started in. `VAGLIO_STATE_DIR` points it at another state
-directory.
+The tab's worktree comes first, marked `●`, and is where the selection lands; when the chat
+moves to another worktree, vaglio moves with it. The rest of the workspace follows, so a task
+spread over several repos (say a backend and a frontend for one ticket) is one list, one group
+per repo. With neither file naming a worktree, vaglio shows the repo the pane was opened in,
+labelled *clone principale*: usually a main checkout on `main`, with whatever is uncommitted
+there. Switching branch inside a worktree needs nothing: the header follows within seconds.
+
+Whatever writes those files decides what shows. In my setup it is a Claude Code `PostToolUse`
+hook that spots a worktree path in the files a chat edits and the commands it runs. A worktree
+that is removed simply drops out. `VAGLIO_STATE_DIR` points vaglio at another state directory.
 
 ## Pull requests
 
@@ -123,6 +128,7 @@ Where the pull request is looked up depends on the worktree's `origin`:
 | <kbd>]</kbd> / <kbd>[</kbd> | | next / previous file |
 | <kbd>Esc</kbd>, <kbd>q</kbd>, <kbd>h</kbd> | | back to the list |
 | <kbd>p</kbd> | open the pull request | open the pull request |
+| <kbd>y</kbd> | copy the file's path, relative to its worktree | same |
 | <kbd>r</kbd> | refresh now, pull requests included | |
 | <kbd>q</kbd> | quit | |
 
