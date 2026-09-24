@@ -5,7 +5,7 @@
 //! yazi follows too), and append every worktree any chat of the workspace works in to
 //! `<state>/spaces/<workspace id>`. The tab's worktree comes first and is where the selection
 //! lands; the rest of the workspace follows, for a task spread over several repos. With neither,
-//! vaglio shows the repo the pane was opened in, usually a main checkout on `main`. The design
+//! the list is empty until a chat starts one: a main checkout is not a task's work. The design
 //! documents the workspace's chats wrote are listed in `<state>/docs/<workspace id>` (see `docs`).
 //!
 //! Paths given on the command line replace all of that. Outside herdr, with no paths, vaglio
@@ -76,9 +76,6 @@ impl Source {
                     roots.push(own);
                 }
                 read_list(space).into_iter().for_each(|p| roots.push(p));
-                if roots.list.is_empty() {
-                    roots.list.extend(crate::git::toplevel(cwd));
-                }
             }
         }
         roots

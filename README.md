@@ -83,8 +83,9 @@ path per line, and redraws whenever either changes:
 The tab's worktree comes first, marked `●`, and is where the selection lands; when the chat
 moves to another worktree, vaglio moves with it. The rest of the workspace follows, so a task
 spread over several repos (say a backend and a frontend for one ticket) is one list, one group
-per repo. With neither file naming a worktree, vaglio shows the repo the pane was opened in:
-usually a main checkout on `main`, with whatever is uncommitted there. Switching branch inside a worktree needs nothing: the header follows within seconds.
+per repo. Until a chat of the workspace works in a worktree, the list stays empty under the
+workspace's name: a main checkout is not a task's work, so vaglio does not show one. Switching
+branch inside a worktree needs nothing: the header follows within seconds.
 
 Whatever writes those files decides what shows. In my setup it is a Claude Code hook that
 moves the tab only at the edges of a turn: when the prompt names a branch or ticket, and at
