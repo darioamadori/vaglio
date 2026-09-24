@@ -3,6 +3,7 @@
 mod app;
 mod diff;
 mod git;
+mod pr;
 mod source;
 mod ui;
 mod worker;
@@ -62,12 +63,16 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Returns false to quit.
-fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<()>) -> bool {
+fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<worker::Poke>) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     if ctrl && key.code == KeyCode::Char('c') {
         return false;
     }
     let page = height.saturating_sub(2).max(1) as isize;
+    if key.code == KeyCode::Char('p') {
+        app.open_pr();
+        return true;
+    }
     if let Some(view) = app.view.as_mut() {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left | KeyCode::Backspace => app.view = None,
@@ -99,7 +104,7 @@ fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<()>) ->
         KeyCode::Char('G') | KeyCode::End => app.select_edge(true),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => app.open(),
         KeyCode::Char('r') => {
-            let _ = poke.send(());
+            let _ = poke.send(worker::Poke::All);
         }
         _ => {}
     }
@@ -118,7 +123,11 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
     let groups = source
         .roots()
         .into_iter()
-        .map(|root| app::Group { tree: git::load(&root).map_err(|e| e.to_string()), root })
+        .map(|root| {
+            let tree = git::load(&root).map_err(|e| e.to_string());
+            let pr = tree.as_ref().ok().map(|t| pr::lookup(&root, &t.branch));
+            app::Group { tree, root, pr }
+        })
         .collect();
     let mut app = App::new();
     app.apply(app::Snapshot { label: source.label(), groups });
