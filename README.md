@@ -169,7 +169,9 @@ replaces it:
 
 vaglio reads it as a pull request link (Bitbucket `…/pull-requests/<id>` or GitHub
 `…/pull/<n>`, whose branches it asks for with the same credentials as above), or else as the
-first branch name it finds in the text (`feature/PROJ-42-checkout`, or a sentence naming one).
+first branch name it finds in the text (`feature/PROJ-42-checkout`, or a sentence naming one),
+or else as a ticket key (`PROJ-42`): the branch carrying it, a worktree's first, then the most
+recently committed `origin/` branch of any main checkout.
 The worktree already on that branch wins, since it is what the reviewing chat reads; otherwise
 it takes the repo's main checkout under `~/Developer/compri`, fetches the branch, and diffs
 `origin/<branch>` against its merge base with the pull request's destination (or the

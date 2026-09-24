@@ -60,9 +60,16 @@ pub fn resolve(args: &str) -> Target {
             return target;
         }
     }
-    let why = match candidates.first() {
-        Some(b) => format!("{b}: nessun worktree né clone ha questo branch (manca un fetch?)"),
-        None => "nessun link di PR né nome di branch".to_string(),
+    let keys = ticket_keys(args);
+    for key in &keys {
+        if let Some(target) = locate_key(key) {
+            return target;
+        }
+    }
+    let why = match (candidates.first(), keys.first()) {
+        (Some(b), _) => format!("{b}: nessun worktree né clone ha questo branch (manca un fetch?)"),
+        (None, Some(k)) => format!("{k}: nessun branch con questa chiave nei worktree né nei clone (manca un fetch?)"),
+        (None, None) => "nessun link di PR, nome di branch o chiave di ticket".to_string(),
     };
     Target::Missing { what, why }
 }
@@ -94,6 +101,52 @@ fn branch_names(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Ticket keys (`CA-615`) in the order they appear.
+fn ticket_keys(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+        let Some((project, number)) = word.split_once('-') else { continue };
+        let project_ok = project.len() >= 2
+            && project.starts_with(|c: char| c.is_ascii_uppercase())
+            && project.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
+        if project_ok && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) && !out.iter().any(|w| w == word) {
+            out.push(word.to_string());
+        }
+    }
+    out
+}
+
+/// A branch carries the key as a whole segment: `feature/CA-615-…`, not `feature/CA-6150`.
+fn names_key(branch: &str, key: &str) -> bool {
+    branch.split('/').any(|seg| seg == key || seg.strip_prefix(key).is_some_and(|rest| rest.starts_with('-')))
+}
+
+/// The branch a ticket key names: a worktree on it first, else the most recently committed
+/// `origin/` branch carrying the key in any main checkout.
+fn locate_key(key: &str) -> Option<Target> {
+    if let Some(wt) = worktrees().into_iter().find(|wt| current_branch(wt).is_some_and(|b| names_key(&b, key))) {
+        return Some(Target::Live(wt));
+    }
+    let mut best: Option<(u64, PathBuf, String)> = None;
+    for clone in clones() {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&clone)
+            .args(["for-each-ref", "--format=%(committerdate:unix) %(refname:lstrip=3)", "refs/remotes/origin"])
+            .output();
+        let Ok(out) = out else { continue };
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let Some((date, branch)) = line.split_once(' ') else { continue };
+            let date: u64 = date.parse().unwrap_or(0);
+            if names_key(branch, key) && best.as_ref().is_none_or(|(d, _, _)| date > *d) {
+                best = Some((date, clone.clone(), branch.to_string()));
+            }
+        }
+    }
+    let (_, clone, branch) = best?;
+    locate(&branch, Some(&clone), None)
 }
 
 fn git_ok(root: &Path, args: &[&str]) -> bool {
@@ -192,5 +245,16 @@ mod tests {
         let text = "Create a work tree, switch to this branch: \nfeature/CA-509-adaptive-polling-schedule.\n\nand then review.";
         assert_eq!(branch_names(text), vec!["feature/CA-509-adaptive-polling-schedule"]);
         assert!(branch_names("fai la review, grazie").is_empty());
+    }
+
+    #[test]
+    fn finds_ticket_keys_and_the_branches_they_name() {
+        assert_eq!(ticket_keys("CA-615"), vec!["CA-615"]);
+        assert_eq!(ticket_keys("rivedi CA-615, poi CB-2784."), vec!["CA-615", "CB-2784"]);
+        assert!(ticket_keys("utf-8 x-client-id A-1").is_empty());
+        assert!(names_key("feature/CA-615-insight-agent-time-saved", "CA-615"));
+        assert!(names_key("CA-615", "CA-615"));
+        assert!(!names_key("feature/CA-6150-other", "CA-615"));
+        assert!(!names_key("feature/XCA-615-other", "CA-615"));
     }
 }
