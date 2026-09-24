@@ -87,7 +87,7 @@ fn bitbucket_credentials() -> Option<(String, String)> {
     }
     let item = Command::new("security").args(["find-generic-password", "-s", KEYCHAIN_SERVICE]).output().ok()?;
     let text = String::from_utf8_lossy(&item.stdout);
-    // `    "acct"<blob>="dario@example.com"`
+    // `    "acct"<blob>="you@example.com"`
     let user = text.lines().find_map(|l| l.trim().strip_prefix("\"acct\"<blob>=\"")?.strip_suffix('"').map(str::to_string))?;
     Some((user, String::from_utf8_lossy(&token.stdout).trim().to_string()))
 }
@@ -104,7 +104,9 @@ fn percent_encode(s: &str) -> String {
 fn bitbucket(workspace: &str, repo: &str, branch: &str) -> PrStatus {
     let new_url = format!("https://bitbucket.org/{workspace}/{repo}/pull-requests/new?source={}", percent_encode(branch));
     let Some((user, token)) = bitbucket_credentials() else { return PrStatus::NoCredentials };
-    let query = percent_encode(&format!("source.branch.name=\"{branch}\""));
+    // BBQL string literal: a quote or backslash in the branch must not end it early.
+    let literal = branch.replace('\\', "\\\\").replace('"', "\\\"");
+    let query = percent_encode(&format!("source.branch.name=\"{literal}\""));
     let url = format!(
         "https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}/pullrequests?q={query}\
          &state=OPEN&state=MERGED&state=DECLINED&sort=-updated_on&pagelen=1\
@@ -174,8 +176,12 @@ fn github(root: &Path, owner: &str, repo: &str, branch: &str) -> PrStatus {
     }
 }
 
-/// Opens a URL in the default browser.
+/// Opens a URL in the default browser. Only https: the URL comes from an API response, and
+/// `open` would just as happily launch a local file or another app's URL scheme.
 pub fn open(url: &str) -> bool {
+    if !url.starts_with("https://") {
+        return false;
+    }
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
     Command::new(opener).arg(url).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
 }
