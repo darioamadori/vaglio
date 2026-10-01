@@ -172,11 +172,15 @@ The list is a state file next to the other two, one JSON object per line:
 {"kind": "artifact", "title": "Model bake-off", "target": "https://claude.ai/code/artifact/…", "at": 1790259848}
 ```
 
-`kind` is `artifact`, `notion`, `doc` or `md`; `target` is the URL or the absolute path; the
-same target written again is the same document, with its newest title. In my setup a Claude
-Code `PostToolUse` hook appends a line whenever a chat publishes an artifact, creates a Notion
-page or a Claude Doc, or writes a `.md` file (memory, skills, `CLAUDE.md`, `README.md` and the
-like excluded). vaglio opens only what such a hook could have written: `https` links on
+`kind` is `artifact`, `notion`, `doc` or `md`; `target` is the URL or the absolute path. The
+same document written again (the same Notion page or claude.ai artifact id, whatever the rest of
+the URL, else the same target) keeps its first link and takes the newest title and time. A line
+with `"update": true` is an edit or a rename: without a title it only moves a document already
+listed to the top, so editing a page nobody listed adds nothing. In my setup a Claude Code
+`PostToolUse` hook appends a line whenever a chat publishes an artifact, creates a Notion page or
+a Claude Doc, or writes a `.md` file (memory, skills, `CLAUDE.md`, `README.md` and the like
+excluded), and an update line when it edits or renames a Notion page or a Claude Doc, edits a
+listed `.md` or moves it with `mv`. vaglio opens only what such a hook could have written: `https` links on
 claude.ai or Notion, and `.md` files that still exist. The row shows only inside herdr.
 
 ## Review workspaces
