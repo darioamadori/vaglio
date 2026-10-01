@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthChar;
 use crate::diff::{self, Kind, Row};
 use crate::docs::Doc;
 use crate::git::{self, FileChange, Tree};
+use crate::jira::{Ticket, TicketStatus};
 use crate::pr::PrStatus;
 
 #[derive(Clone)]
@@ -20,6 +21,8 @@ pub struct Group {
 
 pub struct Snapshot {
     pub label: Option<String>,
+    /// The Jira ticket the label names, if it names one.
+    pub ticket: Option<Ticket>,
     /// The worktree this tab's chat is in.
     pub current: Option<PathBuf>,
     pub groups: Vec<Group>,
@@ -50,6 +53,7 @@ pub enum Item {
 
 pub struct App {
     pub label: Option<String>,
+    pub ticket: Option<Ticket>,
     pub current: Option<PathBuf>,
     pub groups: Vec<Group>,
     pub items: Vec<Item>,
@@ -63,6 +67,8 @@ pub struct App {
     pub review: bool,
     /// A short message in the footer, such as what `p` did.
     pub flash: Option<(String, std::time::Instant)>,
+    /// A draft pull request `p` is creating: the push and the API call run off the UI thread.
+    pub creating: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Where the last frame drew the list, the documents row and the documents list (with the
     /// index of its top line), so a click can be told apart.
     pub list_area: Rect,
@@ -75,6 +81,7 @@ impl App {
     pub fn new() -> App {
         App {
             label: None,
+            ticket: None,
             current: None,
             groups: Vec::new(),
             items: Vec::new(),
@@ -86,6 +93,7 @@ impl App {
             loaded: false,
             review: false,
             flash: None,
+            creating: None,
             list_area: Rect::default(),
             docs_row_area: None,
             docs_area: Rect::default(),
@@ -107,6 +115,7 @@ impl App {
         self.loaded = true;
         self.review = snap.review;
         self.label = snap.label;
+        self.ticket = snap.ticket;
         // The chat moved to another worktree: follow it there, as yazi does.
         let moved = snap.current.is_some() && snap.current != self.current;
         self.current = snap.current;
@@ -250,9 +259,19 @@ impl App {
                 (Some(url), PrStatus::Found(pr)) => {
                     if crate::pr::open(url) { format!("aperta #{}", pr.id) } else { format!("non riesco ad aprire {url}") }
                 }
-                (Some(url), _) => {
+                (_, PrStatus::Missing { .. }) if self.creating.is_some() => "sto già creando la PR draft…".to_string(),
+                (_, PrStatus::Missing { .. }) => {
                     let branch = g.tree.as_ref().map(|t| t.branch.clone()).unwrap_or_default();
-                    if crate::pr::open(url) { format!("nessuna PR per {branch}: aperto il form per crearla") } else { format!("non riesco ad aprire {url}") }
+                    let (root, (tx, rx)) = (g.root.clone(), std::sync::mpsc::channel());
+                    let name = branch.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(crate::pr::create_draft(&root, &name));
+                    });
+                    self.creating = Some(rx);
+                    format!("push di {branch} e PR draft in corso…")
+                }
+                (Some(url), _) => {
+                    if crate::pr::open(url) { "aperta".to_string() } else { format!("non riesco ad aprire {url}") }
                 }
                 (None, PrStatus::NoCredentials) => "PR: manca il token Bitbucket (vedi README)".to_string(),
                 (None, PrStatus::OnBase) => "sei sul branch di integrazione: niente PR da aprire".to_string(),
@@ -260,6 +279,34 @@ impl App {
                 (None, PrStatus::Error(e)) => e.clone(),
                 (None, _) => String::new(),
             },
+        };
+        self.flash = Some((msg, std::time::Instant::now()));
+    }
+
+    /// The draft pull request `p` was creating, once it is there: opened in the browser. True when
+    /// one was created, so the caller re-reads the pull requests.
+    pub fn collect_created(&mut self) -> bool {
+        let Some(rx) = &self.creating else { return false };
+        let Ok(result) = rx.try_recv() else { return false };
+        self.creating = None;
+        let (msg, created) = match result {
+            Ok(url) if crate::pr::open(&url) => ("PR draft creata e aperta".to_string(), true),
+            Ok(url) => (format!("PR draft creata: {url}"), true),
+            Err(e) => (e, false),
+        };
+        self.flash = Some((msg, std::time::Instant::now()));
+        created
+    }
+
+    /// Opens the ticket the workspace is named after.
+    pub fn open_ticket(&mut self) {
+        let msg = match &self.ticket {
+            None => "il nome del workspace non contiene un ticket".to_string(),
+            Some(Ticket { url: Some(url), key, .. }) => {
+                if crate::pr::open(url) { format!("aperto {key}") } else { format!("non riesco ad aprire {url}") }
+            }
+            Some(Ticket { status: Some(TicketStatus::Error(e)), .. }) => e.clone(),
+            Some(_) => "Jira: manca il sito (vedi README)".to_string(),
         };
         self.flash = Some((msg, std::time::Instant::now()));
     }
@@ -324,6 +371,13 @@ impl App {
             return;
         }
         if self.view.is_some() {
+            return;
+        }
+        // The title line: the workspace's name, and the ticket it names.
+        if row == 0 {
+            if self.ticket.is_some() {
+                self.open_ticket();
+            }
             return;
         }
         if self.docs_row_area.is_some_and(hit) {
@@ -551,7 +605,7 @@ mod tests {
         };
         let group = Group { root: tree.root.clone(), tree: Ok(tree), pr: None };
         let mut app = App::new();
-        app.apply(Snapshot { label: None, current: None, groups: vec![group], docs: None, review: false });
+        app.apply(Snapshot { label: None, ticket: None, current: None, groups: vec![group], docs: None, review: false });
         app.list_area = Rect { x: 0, y: 1, width: 80, height: 10 };
         app
     }

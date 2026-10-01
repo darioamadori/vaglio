@@ -104,7 +104,7 @@ fn branch_names(text: &str) -> Vec<String> {
 }
 
 /// Ticket keys (`AB-123`) in the order they appear.
-fn ticket_keys(text: &str) -> Vec<String> {
+pub fn ticket_keys(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
         let Some((project, number)) = word.split_once('-') else { continue };

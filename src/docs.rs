@@ -22,7 +22,7 @@ impl Kind {
         match self {
             Kind::Artifact => "artifact",
             Kind::Notion => "notion",
-            Kind::ClaudeDoc => "doc",
+            Kind::ClaudeDoc => "artifact",
             Kind::Markdown => "md",
         }
     }

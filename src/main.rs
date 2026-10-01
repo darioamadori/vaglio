@@ -5,6 +5,7 @@ mod clipboard;
 mod diff;
 mod docs;
 mod git;
+mod jira;
 mod pr;
 mod review;
 mod source;
@@ -31,7 +32,8 @@ Mostra i file che ogni worktree ha cambiato rispetto al branch di integrazione
 Senza argomenti, dentro herdr segue il workspace (lista scritta dal plugin
 layout); fuori da herdr mostra il repo della directory corrente.
 
-vaglio --check-token [PATH]   prova il token Bitbucket sul repo di PATH (default: qui)";
+vaglio --check-token [PATH]   prova il token Bitbucket sul repo di PATH (default: qui)
+vaglio --check-jira KEY       prova il token Jira leggendo lo stato del ticket KEY";
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -42,6 +44,15 @@ fn main() -> anyhow::Result<()> {
     if args.first().is_some_and(|a| a == "--check-token") {
         let dir = args.get(1).map_or_else(|| std::env::current_dir().unwrap_or_default(), std::path::PathBuf::from);
         let (ok, msg) = pr::check_token(&dir);
+        println!("{msg}");
+        std::process::exit(if ok { 0 } else { 1 });
+    }
+    if args.first().is_some_and(|a| a == "--check-jira") {
+        let Some(key) = args.get(1) else {
+            println!("uso: vaglio --check-jira AB-123");
+            std::process::exit(2);
+        };
+        let (ok, msg) = jira::check(key);
         println!("{msg}");
         std::process::exit(if ok { 0 } else { 1 });
     }
@@ -62,6 +73,9 @@ fn main() -> anyhow::Result<()> {
         loop {
             while let Ok(snap) = snap_rx.try_recv() {
                 app.apply(snap);
+            }
+            if app.collect_created() {
+                let _ = poke_tx.send(worker::Poke::All);
             }
             terminal.draw(|f| ui::draw(f, &mut app))?;
             if !event::poll(Duration::from_millis(100))? {
@@ -97,6 +111,10 @@ fn handle(app: &mut App, key: KeyEvent, height: u16, poke: &mpsc::Sender<worker:
         }
         KeyCode::Char('y') => {
             app.copy_path();
+            return true;
+        }
+        KeyCode::Char('t') => {
+            app.open_ticket();
             return true;
         }
         _ => {}
@@ -186,8 +204,14 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
             group
         })
         .collect();
+    let label = source.label();
+    let ticket = label.as_deref().and_then(jira::key_in).map(|key| jira::Ticket {
+        status: Some(jira::lookup(&key)),
+        url: jira::browse_url(&key),
+        key,
+    });
     let mut app = App::new();
-    app.apply(app::Snapshot { label: source.label(), current, groups, docs: source.docs(), review });
+    app.apply(app::Snapshot { label, ticket, current, groups, docs: source.docs(), review });
     let mut terminal = ratatui::Terminal::new(TestBackend::new(w, h))?;
     let (tx, _rx) = mpsc::channel();
     terminal.draw(|f| ui::draw(f, &mut app))?;

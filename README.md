@@ -124,6 +124,27 @@ Where the pull request is looked up depends on the worktree's `origin`:
   `token ok`, or why Bitbucket refused it (a 401 is a wrong email or token, a 403 names the
   missing scope). If a 403 names another scope, add that one, and nothing else.
 
+## Jira ticket
+
+When the herdr workspace's name carries a ticket key (`AB-12 widget`), the title shows the
+ticket's status next to it: grey while it is to do, blue in progress, green once done. The key
+is underlined; a click on the title, or <kbd>t</kbd>, opens the ticket in the browser. The status
+is asked for every minute, and on <kbd>r</kbd>. Renaming the workspace in herdr shows within
+a few seconds, key and status included.
+
+It needs an Atlassian email and API token of its own, and the Jira site. Create the token at
+<https://id.atlassian.com/manage-profile/security/api-tokens> (*Create API token with scopes*,
+app Jira, scope `read:jira-work`, nothing else), copy it, and store it with the site as the
+item's comment:
+
+```sh
+security add-generic-password -U -s vaglio-jira -a you@example.com -j your-company.atlassian.net -w "$(pbpaste)"
+pbcopy < /dev/null
+```
+
+`VAGLIO_JIRA_USER`, `VAGLIO_JIRA_TOKEN` and `VAGLIO_JIRA_SITE` work too. A classic token without
+scopes also does. `vaglio --check-jira AB-12` prints the ticket's status, or why Jira refused.
+
 ## Design documents
 
 Pinned at the foot of the list, **design doc** counts the design documents the chats of the
@@ -183,7 +204,7 @@ command does.
 
 The wheel scrolls a diff three lines at a time, and moves the selection in the lists. A click
 selects a file or a document, a second click on it opens it; a click on a pull request line opens
-that pull request.
+that pull request, and a click on the title the workspace's Jira ticket.
 
 ## Keys
 
@@ -200,6 +221,7 @@ that pull request.
 | <kbd>]</kbd> / <kbd>[</kbd> | | next / previous file |
 | <kbd>Esc</kbd>, <kbd>q</kbd>, <kbd>h</kbd> | | back to the list |
 | <kbd>p</kbd> | open the pull request | open the pull request |
+| <kbd>t</kbd> | open the Jira ticket the workspace is named after | same |
 | <kbd>y</kbd> | copy the file's path, relative to its worktree | same |
 | <kbd>r</kbd> | refresh now, pull requests included | |
 | <kbd>q</kbd> | quit | |
@@ -244,6 +266,7 @@ vaglio --snapshot 90x24 $'\nfn' ~/some/worktree | less -R   # hunks only, second
 | `src/git.rs` | changed files and per-file diffs |
 | `src/diff.rs` | parses a unified diff into rows: line numbers, syntax colours, changed words |
 | `src/pr.rs` | the pull request of a branch, on Bitbucket or GitHub |
+| `src/jira.rs` | the status of the ticket the workspace is named after |
 | `src/docs.rs` | the workspace's design documents, and opening each in its own app |
 | `src/worker.rs` | background thread: file watcher, refresh timer, pull request cache |
 | `src/app.rs` | what is on screen and how keys move it |

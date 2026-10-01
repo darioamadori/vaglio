@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 use crate::app::{Group, Snapshot};
+use crate::jira::{self, Ticket};
 use crate::pr::{self, PrStatus};
 use crate::review::{self, Target};
 use crate::source::Source;
@@ -25,7 +26,6 @@ pub enum Poke {
 const EVERY: Duration = Duration::from_secs(3);
 /// Claude writes a file in several events: wait for the burst to end before reading.
 const SETTLE: Duration = Duration::from_millis(200);
-const LABEL_EVERY: Duration = Duration::from_secs(30);
 const PR_EVERY: Duration = Duration::from_secs(60);
 /// A review whose branch was not found yet: the chat may be about to fetch it or check it out.
 const REVIEW_RETRY: Duration = Duration::from_secs(20);
@@ -100,8 +100,7 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
         }
     }
 
-    let mut label = None;
-    let mut label_at: Option<Instant> = None;
+    let mut ticket: Option<(Instant, Ticket)> = None;
     let mut prs: HashMap<(PathBuf, String), (Instant, PrStatus)> = HashMap::new();
     let mut resolved = None;
     let mut refresh = false;
@@ -119,9 +118,11 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
         }
         watched = roots.clone();
 
-        if label_at.is_none_or(|t| t.elapsed() > LABEL_EVERY) {
-            label = source.label();
-            label_at = Some(Instant::now());
+        // Every round: a rename in herdr must show, and asking herdr takes a few milliseconds.
+        let label = source.label();
+        let key = label.as_deref().and_then(jira::key_in);
+        if ticket.as_ref().map(|(_, t)| &t.key) != key.as_ref() {
+            ticket = key.map(|key| (Instant::now(), Ticket { url: None, status: None, key }));
         }
         let mut groups: Vec<Group> = targets
             .iter()
@@ -133,12 +134,27 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
             })
             .collect();
         let docs = source.docs();
-        let snapshot = |groups: Vec<Group>, docs| Snapshot { label: label.clone(), current: current.clone(), groups, docs, review: in_review };
-        if out.send(snapshot(groups.clone(), docs.clone())).is_err() {
+        let snapshot = |groups: Vec<Group>, docs, ticket: &Option<(Instant, Ticket)>| Snapshot {
+            label: label.clone(),
+            ticket: ticket.as_ref().map(|(_, t)| t.clone()),
+            current: current.clone(),
+            groups,
+            docs,
+            review: in_review,
+        };
+        if out.send(snapshot(groups.clone(), docs.clone(), &ticket)).is_err() {
             return;
         }
 
         let mut looked_up = false;
+        if let Some((at, t)) = ticket.as_mut() {
+            if t.status.is_none() || at.elapsed() > PR_EVERY {
+                t.status = Some(jira::lookup(&t.key));
+                t.url = jira::browse_url(&t.key);
+                *at = Instant::now();
+                looked_up = true;
+            }
+        }
         for group in groups.iter_mut() {
             let Ok(tree) = &group.tree else { continue };
             let key = (group.root.clone(), tree.branch.clone());
@@ -150,13 +166,16 @@ fn run(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receive
             group.pr = Some(status);
             looked_up = true;
         }
-        if looked_up && out.send(snapshot(groups, docs)).is_err() {
+        if looked_up && out.send(snapshot(groups, docs, &ticket)).is_err() {
             return;
         }
 
         let mut on_poke = |poke: Poke| {
             if matches!(poke, Poke::All) {
                 prs.clear();
+                if let Some(t) = ticket.as_mut() {
+                    t.1.status = None;
+                }
                 refresh = true;
             }
         };

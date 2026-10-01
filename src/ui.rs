@@ -11,6 +11,7 @@ use crate::app::{App, DiffView, Item};
 use crate::docs::{self, Kind as DocKind};
 use crate::diff::Kind;
 use crate::git::Status;
+use crate::jira::TicketStatus;
 use crate::pr::PrStatus;
 
 const MINUS_BG: Color = Color::Rgb(0x3f, 0x00, 0x01);
@@ -72,7 +73,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         };
         app.list_area = list;
         draw_list(f, app, list);
-        let hints = keys(&[("j/k", "muovi"), ("⏎", "apri"), ("p", "PR"), ("y", "copia path"), ("r", "aggiorna"), ("q", "esci")]);
+        let mut pairs = vec![("j/k", "muovi"), ("⏎", "apri"), ("p", "PR")];
+        if app.ticket.is_some() {
+            pairs.push(("t", "ticket"));
+        }
+        pairs.extend([("y", "copia path"), ("r", "aggiorna"), ("q", "esci")]);
+        let hints = keys(&pairs);
         f.render_widget(Paragraph::new(flash.unwrap_or(hints)), footer);
     }
 }
@@ -162,8 +168,38 @@ fn list_title(app: &App, w: u16) -> Line<'static> {
     let n = app.file_count();
     let right = vec![Span::styled(format!("{n} file "), Style::new().fg(DIM))];
     let mut left = review_badge(app);
-    left.push(Span::styled(format!(" {name}"), Style::new().fg(TEXT).add_modifier(Modifier::BOLD)));
+    let bold = Style::new().fg(TEXT).add_modifier(Modifier::BOLD);
+    // The ticket key is underlined: a click on the title opens it.
+    match app.ticket.as_ref().and_then(|t| Some((name.find(t.key.as_str())?, t.key.len()))) {
+        Some((at, len)) => {
+            left.push(Span::styled(format!(" {}", &name[..at]), bold));
+            left.push(Span::styled(name[at..at + len].to_string(), bold.add_modifier(Modifier::UNDERLINED)));
+            left.push(Span::styled(name[at + len..].to_string(), bold));
+        }
+        None => left.push(Span::styled(format!(" {name}"), bold)),
+    }
+    if let Some(ticket) = &app.ticket {
+        left.push(Span::raw("  "));
+        left.push(ticket_badge(ticket.status.as_ref()));
+    }
     split_line(left, right, w, None)
+}
+
+/// The ticket's status next to the name: grey to do, blue in progress, green done.
+fn ticket_badge(status: Option<&TicketStatus>) -> Span<'static> {
+    match status {
+        None => Span::styled("…", Style::new().fg(DIM)),
+        Some(TicketStatus::NoCredentials) => Span::styled("jira: nessun token", Style::new().fg(DIM)),
+        Some(TicketStatus::Error(_)) => Span::styled("jira ?", Style::new().fg(RED)),
+        Some(TicketStatus::Found { name, category }) => {
+            let color = match category.as_str() {
+                "done" => GREEN,
+                "indeterminate" => BLUE,
+                _ => DIM,
+            };
+            Span::styled(name.to_uppercase(), Style::new().fg(color).add_modifier(Modifier::BOLD))
+        }
+    }
 }
 
 /// `libs/ai-agents/…/deferral.py`, cut from the left so the file name always shows.
@@ -362,7 +398,7 @@ fn draw_docs(f: &mut Frame, app: &mut App, area: Rect) {
             let color = match doc.kind {
                 DocKind::Artifact => BLUE,
                 DocKind::Notion => TEXT,
-                DocKind::ClaudeDoc => MAGENTA,
+                DocKind::ClaudeDoc => BLUE,
                 DocKind::Markdown => YELLOW,
             };
             let left = vec![
