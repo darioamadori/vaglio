@@ -1,8 +1,11 @@
 //! The design documents the chats of a workspace have written: artifacts, Notion pages, Claude
 //! Docs, Markdown files. A Claude Code hook appends one JSON object per line to
 //! `<state>/docs/<workspace id>`: `{"kind", "title", "target", "at"}`, target being a URL or an
-//! absolute path, `at` seconds since the epoch. The same target written again is the same
-//! document, its newest title and time winning.
+//! absolute path, `at` seconds since the epoch. The same document written again (same Notion page
+//! or claude.ai artifact id, whatever the rest of the URL, else the same target) keeps its first
+//! target and takes the newest title and time. A line with `"update": true` is an edit or a
+//! rename: without a title it only moves a document already on the list to the top, and a
+//! document not on the list joins it only when the line names it.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -50,15 +53,38 @@ pub fn read(file: &Path) -> Vec<Doc> {
             _ => continue,
         };
         let Some(target) = v["target"].as_str().filter(|t| !t.is_empty()) else { continue };
-        let title = v["title"].as_str().filter(|t| !t.trim().is_empty()).unwrap_or(target).trim().to_string();
-        let doc = Doc { kind, title, target: target.to_string(), at: v["at"].as_u64().unwrap_or(0) };
-        docs.retain(|d| d.target != doc.target);
-        docs.push(doc);
+        let title = v["title"].as_str().map(str::trim).filter(|t| !t.is_empty());
+        let at = v["at"].as_u64().unwrap_or(0);
+        let update = v["update"].as_bool().unwrap_or(false);
+        let id = key(target);
+        match docs.iter().position(|d| key(&d.target) == id) {
+            Some(i) => {
+                let old = docs.remove(i);
+                let title = title.map_or(old.title, str::to_string);
+                docs.push(Doc { kind: old.kind, title, target: old.target, at });
+            }
+            None if update && title.is_none() => {}
+            None => docs.push(Doc { kind, title: title.unwrap_or(target).to_string(), target: target.to_string(), at }),
+        }
     }
     // A Markdown file deleted since it was written is no longer a document.
     docs.retain(|d| d.kind != Kind::Markdown || Path::new(&d.target).is_file());
     docs.sort_by(|a, b| b.at.cmp(&a.at));
     docs
+}
+
+/// What tells one document from another: a Notion page id, a claude.ai artifact id, else the target.
+fn key(target: &str) -> String {
+    if let Some(id) = notion_page_id(target).filter(|_| target.contains("notion")) {
+        return format!("notion:{}", id.to_ascii_lowercase());
+    }
+    if https_host(target) == Some("claude.ai") {
+        let path = target.split(['?', '#']).next().unwrap_or(target);
+        if let Some((_, id)) = path.trim_end_matches('/').rsplit_once("/artifact/") {
+            return format!("claude:{id}");
+        }
+    }
+    target.to_string()
 }
 
 /// `https://app.notion.com/p/<id>?pvs=…` → the page id, for the desktop app's own scheme.
@@ -151,6 +177,34 @@ mod tests {
         .unwrap();
         let docs = read(&file);
         assert_eq!(docs.iter().map(|d| d.title.as_str()).collect::<Vec<_>>(), ["New", "Page"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn edits_and_renames_update_the_same_document() {
+        let dir = std::env::temp_dir().join(format!("vaglio-docs-upd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ws");
+        let id = "0123456789abcdef0123456789abcdef";
+        std::fs::write(
+            &file,
+            [
+                format!(r#"{{"kind":"notion","title":"Draft","target":"https://app.notion.com/p/{id}?pvs=204","at":1}}"#),
+                r#"{"kind":"doc","title":"Doc","target":"https://claude.ai/code/artifact/abcd1234","at":2}"#.to_string(),
+                // A rename reaches the page by another URL.
+                format!(r#"{{"kind":"notion","title":"Final","target":"https://app.notion.com/p/{id}","at":3,"update":true}}"#),
+                // A content edit, no title: the doc moves to the top, its name unchanged.
+                r#"{"kind":"doc","title":"","target":"https://claude.ai/code/artifact/abcd1234","at":4,"update":true}"#.to_string(),
+                // An edit of a document never listed, without a name: not a document of the workspace.
+                r#"{"kind":"notion","title":"","target":"https://app.notion.com/p/ffffffffffffffffffffffffffffffff","at":5,"update":true}"#.to_string(),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let docs = read(&file);
+        let got: Vec<_> = docs.iter().map(|d| (d.title.as_str(), d.at)).collect();
+        assert_eq!(got, [("Doc", 4), ("Final", 3)]);
+        assert_eq!(docs[1].target, format!("https://app.notion.com/p/{id}?pvs=204"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
