@@ -185,9 +185,9 @@ fn bitbucket_error(code: &str, json: &Value) -> String {
 }
 
 /// Pushes the branch, so it has its own upstream on origin, and opens a draft pull request for it
-/// into the integration branch the diff is taken against, titled after the branch's first commit.
-/// Returns the pull request's web URL.
-pub fn create_draft(root: &Path, branch: &str) -> Result<String, String> {
+/// into the integration branch the diff is taken against, titled after the branch's first commit
+/// unless a title is given. Returns the pull request's web URL.
+pub fn create_draft(root: &Path, branch: &str, title: Option<&str>, description: &str) -> Result<String, String> {
     let host = host(root).ok_or("PR: origin non è né Bitbucket né GitHub")?;
     let push = Command::new("git").arg("-C").arg(root).args(["push", "-q", "-u", "origin", branch]).output();
     let push = push.map_err(|_| "git non trovato".to_string())?;
@@ -198,9 +198,9 @@ pub fn create_draft(root: &Path, branch: &str) -> Result<String, String> {
     let base_ref = crate::git::base_branch(root);
     let base = base_ref.strip_prefix("origin/").unwrap_or(&base_ref).to_string();
     let log = Command::new("git").arg("-C").arg(root).args(["log", "--reverse", "--format=%s", &format!("{base_ref}..{branch}")]).output();
-    let title = log
+    let title = title.map(str::to_string).filter(|t| !t.trim().is_empty()).or_else(|| log
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string))
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string)))
         .unwrap_or_else(|| branch.to_string());
     match host {
         Host::Bitbucket { workspace, repo } => {
@@ -208,6 +208,7 @@ pub fn create_draft(root: &Path, branch: &str) -> Result<String, String> {
             let url = format!("https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}/pullrequests");
             let body = serde_json::json!({
                 "title": title,
+                "description": description,
                 "source": {"branch": {"name": branch}},
                 "destination": {"branch": {"name": base}},
                 "draft": true,
@@ -222,7 +223,7 @@ pub fn create_draft(root: &Path, branch: &str) -> Result<String, String> {
             let out = Command::new("gh")
                 .current_dir(root)
                 .args(["pr", "create", "--draft", "--repo", &format!("{owner}/{repo}"), "--head", branch, "--base", &base])
-                .args(["--title", &title, "--body", ""])
+                .args(["--title", &title, "--body", description])
                 .output()
                 .map_err(|_| "gh non trovato".to_string())?;
             if !out.status.success() {
@@ -302,12 +303,28 @@ pub fn check_token(dir: &Path) -> (bool, String) {
         return (false, format!("{}: origin non è su Bitbucket", root.display()));
     };
     match bitbucket(&workspace, &repo, "vaglio-check-token") {
-        PrStatus::Missing { .. } | PrStatus::Found(_) => (true, format!("token ok: legge le PR di {workspace}/{repo}")),
+        PrStatus::Missing { .. } | PrStatus::Found(_) => match probe_write(&workspace, &repo) {
+            Ok(()) => (true, format!("token ok: legge e crea le PR di {workspace}/{repo}")),
+            Err(e) => (false, format!("legge le PR di {workspace}/{repo}, ma non può crearle: {e}")),
+        },
         PrStatus::NoCredentials => {
             (false, format!("nessun token: manca l'elemento {KEYCHAIN_SERVICE} nel portachiavi (o VAGLIO_BITBUCKET_USER/TOKEN)"))
         }
         PrStatus::Error(e) => (false, e),
         other => (false, format!("{other:?}")),
+    }
+}
+
+/// Whether the token may create pull requests, without creating one: Bitbucket checks the scope
+/// before the body, so an empty POST is refused with 403 when the scope is missing and with 400
+/// (no source branch) when it is there.
+fn probe_write(workspace: &str, repo: &str) -> Result<(), String> {
+    let Some((user, token)) = bitbucket_credentials() else { return Err("nessun token".into()) };
+    let url = format!("https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}/pullrequests");
+    let (code, json) = curl_post(&url, &user, &token, &serde_json::json!({})).map_err(|e| format!("Bitbucket: {e}"))?;
+    match code.as_str() {
+        "400" => Ok(()),
+        other => Err(bitbucket_error(other, &json)),
     }
 }
 

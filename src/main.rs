@@ -32,7 +32,11 @@ Mostra i file che ogni worktree ha cambiato rispetto al branch di integrazione
 Senza argomenti, dentro herdr segue il workspace (lista scritta dal plugin
 layout); fuori da herdr mostra il repo della directory corrente.
 
-vaglio --check-token [PATH]   prova il token Bitbucket sul repo di PATH (default: qui)
+vaglio --check-token [PATH]   prova il token Bitbucket sul repo di PATH (default: qui):
+                              lettura e creazione delle PR
+vaglio --create-pr PATH [--title T] [--description D]
+                              push del branch di PATH e PR draft verso il branch di
+                              integrazione; se la PR c'è già, ne stampa solo il link
 vaglio --check-jira KEY       prova il token Jira leggendo lo stato del ticket KEY";
 
 fn main() -> anyhow::Result<()> {
@@ -46,6 +50,9 @@ fn main() -> anyhow::Result<()> {
         let (ok, msg) = pr::check_token(&dir);
         println!("{msg}");
         std::process::exit(if ok { 0 } else { 1 });
+    }
+    if args.first().is_some_and(|a| a == "--create-pr") {
+        std::process::exit(create_pr(&args[1..]));
     }
     if args.first().is_some_and(|a| a == "--check-jira") {
         let Some(key) = args.get(1) else {
@@ -240,4 +247,69 @@ fn snapshot(args: &[String]) -> anyhow::Result<()> {
         println!("{line}\x1b[0m");
     }
     Ok(())
+}
+
+/// `--create-pr PATH [--title T] [--description D]`: the draft pull request a chat opens with
+/// vaglio's own token. Prints the link and exits 0, or the reason and exits 1.
+fn create_pr(args: &[String]) -> i32 {
+    let (mut path, mut title, mut description) = (None, None, String::new());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--title" => title = it.next().cloned(),
+            "--description" => description = it.next().cloned().unwrap_or_default(),
+            _ if path.is_none() => path = Some(std::path::PathBuf::from(a)),
+            other => {
+                println!("argomento inatteso: {other}");
+                return 2;
+            }
+        }
+    }
+    let Some(path) = path else {
+        println!("uso: vaglio --create-pr PATH [--title T] [--description D]");
+        return 2;
+    };
+    let Some(root) = git::toplevel(&path) else {
+        println!("{} non è un repo git", path.display());
+        return 1;
+    };
+    let out = std::process::Command::new("git").arg("-C").arg(&root).args(["branch", "--show-current"]).output();
+    let branch = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+    if branch.is_empty() {
+        println!("{}: nessun branch (HEAD staccato)", root.display());
+        return 1;
+    }
+    match pr::lookup(&root, &branch) {
+        pr::PrStatus::Found(found) => {
+            println!("{}", found.url);
+            return 0;
+        }
+        pr::PrStatus::Missing { .. } => {}
+        pr::PrStatus::OnBase => {
+            println!("{branch} è un branch di integrazione: niente PR da aprire");
+            return 1;
+        }
+        pr::PrStatus::NoHost => {
+            println!("origin non è né Bitbucket né GitHub");
+            return 1;
+        }
+        pr::PrStatus::NoCredentials => {
+            println!("manca il token Bitbucket di vaglio (vedi README)");
+            return 1;
+        }
+        pr::PrStatus::Error(e) => {
+            println!("{e}");
+            return 1;
+        }
+    }
+    match pr::create_draft(&root, &branch, title.as_deref(), &description) {
+        Ok(url) => {
+            println!("{url}");
+            0
+        }
+        Err(e) => {
+            println!("{e}");
+            1
+        }
+    }
 }

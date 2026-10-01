@@ -265,7 +265,7 @@ impl App {
                     let (root, (tx, rx)) = (g.root.clone(), std::sync::mpsc::channel());
                     let name = branch.clone();
                     std::thread::spawn(move || {
-                        let _ = tx.send(crate::pr::create_draft(&root, &name));
+                        let _ = tx.send(crate::pr::create_draft(&root, &name, None, ""));
                     });
                     self.creating = Some(rx);
                     format!("push di {branch} e PR draft in corso…")

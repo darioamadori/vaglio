@@ -97,8 +97,17 @@ that is removed simply drops out. `VAGLIO_STATE_DIR` points vaglio at another st
 
 Under each worktree's header, vaglio shows the pull request of its branch (number, DRAFT /
 OPEN / MERGED / DECLINED, title), or **nessuna PR** in red when the branch has none yet.
-<kbd>p</kbd> opens it in the browser, or the form to create it when there is none. Lookups are
+<kbd>p</kbd> opens it in the browser; when there is none, it pushes the branch and opens a draft
+pull request into the integration branch, titled after the branch's first commit. Lookups are
 refreshed every minute; <kbd>r</kbd> forces one.
+
+A chat opens the same draft from the command line, with vaglio's token, which it never sees:
+
+```sh
+vaglio --create-pr ~/some/worktree --title "AB-123: what it does" --description "..."
+```
+
+It prints the pull request's link, or only that link when the branch already has one.
 
 Where the pull request is looked up depends on the worktree's `origin`:
 
@@ -107,8 +116,9 @@ Where the pull request is looked up depends on the worktree's `origin`:
   token, from `VAGLIO_BITBUCKET_USER` and `VAGLIO_BITBUCKET_TOKEN`, or from the macOS Keychain
   item `vaglio-bitbucket`. Create the token at
   <https://id.atlassian.com/manage-profile/security/api-tokens> (*Create API token with
-  scopes*, app Bitbucket, scopes `read:pullrequest:bitbucket` and `read:repository:bitbucket`,
-  nothing else). Copy it, then store it straight from the clipboard and clear the clipboard:
+  scopes*, app Bitbucket, scopes `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`
+  and `read:repository:bitbucket`, nothing else: the write scope is what creating a draft
+  needs). Copy it, then store it straight from the clipboard and clear the clipboard:
 
   ```sh
   security add-generic-password -U -s vaglio-bitbucket -a you@example.com -w "$(pbpaste)"
@@ -122,7 +132,8 @@ Where the pull request is looked up depends on the worktree's `origin`:
   The token reaches `curl` on stdin, never on its command line. To try it without opening the
   pane, run `vaglio --check-token` inside any clone whose `origin` is on Bitbucket: it prints
   `token ok`, or why Bitbucket refused it (a 401 is a wrong email or token, a 403 names the
-  missing scope). If a 403 names another scope, add that one, and nothing else.
+  missing scope). It also tries creating a pull request with an empty body, which Bitbucket
+  refuses before creating anything: 400 means the token may create them, 403 that it may not. If a 403 names another scope, add that one, and nothing else.
 
 ## Jira ticket
 
