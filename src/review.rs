@@ -5,7 +5,10 @@
 //! naming one) to `<state>/review/<workspace id>`; each new `/pr-review` replaces it. Here it
 //! becomes something to load: the worktree already on that branch when there is one (it is what
 //! the chat reads), otherwise the repo's main checkout, diffed on `origin/<branch>` after a fetch.
+//! A branch name or ticket key is looked up in every repo: a ticket that touched two repos shows
+//! one group per repo, not just the first one found.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -33,37 +36,40 @@ fn umbrella() -> PathBuf {
     home().join("Developer")
 }
 
-/// Resolves the `/pr-review` arguments. May fetch, so it runs in the worker, never per frame.
-pub fn resolve(args: &str) -> Target {
+/// Resolves the `/pr-review` arguments, one target per repo. May fetch, so it runs in the
+/// worker, never per frame.
+pub fn resolve(args: &str) -> Vec<Target> {
     let args = args.trim();
     let what = args.lines().next().unwrap_or("").to_string();
     if args.is_empty() {
         // Bare `/pr-review` reviews api's current branch against main.
-        return Target::Live(umbrella().join("api"));
+        return vec![Target::Live(umbrella().join("api"))];
     }
     if let Some((host, id)) = pr_link(args) {
         let repo = match &host {
             Host::Bitbucket { repo, .. } | Host::GitHub { repo, .. } => repo.clone(),
         };
         let Some(clone) = clones().into_iter().find(|c| c.file_name().is_some_and(|n| n == repo.as_str())) else {
-            return Target::Missing { what, why: format!("nessun clone di {repo} in ~/Developer") };
+            return vec![Target::Missing { what, why: format!("nessun clone di {repo} in ~/Developer") }];
         };
-        return match pr::branches(&clone, &host, id) {
+        return vec![match pr::branches(&clone, &host, id) {
             Ok((src, dst)) => locate(&src, Some(&clone), Some(&dst))
                 .unwrap_or_else(|| Target::Missing { what, why: format!("{src}: git fetch non lo trova") }),
             Err(why) => Target::Missing { what, why },
-        };
+        }];
     }
     let candidates = branch_names(args);
     for branch in &candidates {
-        if let Some(target) = locate(branch, None, None) {
-            return target;
+        let found = locate_everywhere(branch);
+        if !found.is_empty() {
+            return found;
         }
     }
     let keys = ticket_keys(args);
     for key in &keys {
-        if let Some(target) = locate_key(key) {
-            return target;
+        let found = locate_key(key);
+        if !found.is_empty() {
+            return found;
         }
     }
     let why = match (candidates.first(), keys.first()) {
@@ -71,7 +77,7 @@ pub fn resolve(args: &str) -> Target {
         (None, Some(k)) => format!("{k}: nessun branch con questa chiave nei worktree né nei clone (manca un fetch?)"),
         (None, None) => "nessun link di PR, nome di branch o chiave di ticket".to_string(),
     };
-    Target::Missing { what, why }
+    vec![Target::Missing { what, why }]
 }
 
 /// `https://bitbucket.org/<ws>/<repo>/pull-requests/<id>…` or `https://github.com/<o>/<r>/pull/<n>`.
@@ -123,30 +129,67 @@ fn names_key(branch: &str, key: &str) -> bool {
     branch.split('/').any(|seg| seg == key || seg.strip_prefix(key).is_some_and(|rest| rest.starts_with('-')))
 }
 
-/// The branch a ticket key names: a worktree on it first, else the most recently committed
-/// `origin/` branch carrying the key in any main checkout.
-fn locate_key(key: &str) -> Option<Target> {
-    if let Some(wt) = worktrees().into_iter().find(|wt| current_branch(wt).is_some_and(|b| names_key(&b, key))) {
-        return Some(Target::Live(wt));
+/// The branches a ticket key names, one per repo: a worktree on one first, else the most
+/// recently committed `origin/` branch carrying the key in that repo's main checkout.
+fn locate_key(key: &str) -> Vec<Target> {
+    let mut found: Vec<(OsString, Target)> = Vec::new();
+    for wt in worktrees() {
+        let Some(repo) = worktree_repo(&wt) else { continue };
+        if !found.iter().any(|(r, _)| *r == repo) && current_branch(&wt).is_some_and(|b| names_key(&b, key)) {
+            found.push((repo, Target::Live(wt)));
+        }
     }
-    let mut best: Option<(u64, PathBuf, String)> = None;
     for clone in clones() {
+        let Some(repo) = clone.file_name().map(|n| n.to_owned()) else { continue };
+        if found.iter().any(|(r, _)| *r == repo) {
+            continue;
+        }
         let out = Command::new("git")
             .arg("-C")
             .arg(&clone)
             .args(["for-each-ref", "--format=%(committerdate:unix) %(refname:lstrip=3)", "refs/remotes/origin"])
             .output();
         let Ok(out) = out else { continue };
+        let mut best: Option<(u64, String)> = None;
         for line in String::from_utf8_lossy(&out.stdout).lines() {
             let Some((date, branch)) = line.split_once(' ') else { continue };
             let date: u64 = date.parse().unwrap_or(0);
-            if names_key(branch, key) && best.as_ref().is_none_or(|(d, _, _)| date > *d) {
-                best = Some((date, clone.clone(), branch.to_string()));
+            if names_key(branch, key) && best.as_ref().is_none_or(|(d, _)| date > *d) {
+                best = Some((date, branch.to_string()));
             }
         }
+        if let Some(target) = best.and_then(|(_, branch)| locate(&branch, Some(&clone), None)) {
+            found.push((repo, target));
+        }
     }
-    let (_, clone, branch) = best?;
-    locate(&branch, Some(&clone), None)
+    found.into_iter().map(|(_, t)| t).collect()
+}
+
+/// `branch` in every repo that has it: its worktree when there is one, else `origin/<branch>`.
+fn locate_everywhere(branch: &str) -> Vec<Target> {
+    let mut found: Vec<(OsString, Target)> = Vec::new();
+    for wt in worktrees() {
+        let Some(repo) = worktree_repo(&wt) else { continue };
+        if !found.iter().any(|(r, _)| *r == repo) && current_branch(&wt).as_deref() == Some(branch) {
+            found.push((repo, Target::Live(wt)));
+        }
+    }
+    let remote_ref = format!("refs/remotes/origin/{branch}");
+    for clone in clones() {
+        let Some(repo) = clone.file_name().map(|n| n.to_owned()) else { continue };
+        if found.iter().any(|(r, _)| *r == repo) || !git_ok(&clone, &["rev-parse", "--verify", "--quiet", &remote_ref]) {
+            continue;
+        }
+        if let Some(target) = locate(branch, Some(&clone), None) {
+            found.push((repo, target));
+        }
+    }
+    found.into_iter().map(|(_, t)| t).collect()
+}
+
+/// The repo a worktree under `<worktrees>/<repo>/<slug>` belongs to.
+fn worktree_repo(wt: &Path) -> Option<OsString> {
+    wt.parent().and_then(Path::file_name).map(|n| n.to_owned())
 }
 
 fn git_ok(root: &Path, args: &[&str]) -> bool {

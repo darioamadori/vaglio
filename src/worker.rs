@@ -51,26 +51,26 @@ pub fn load_group(target: &Target) -> Group {
 
 /// What to show: the pull request under review in a review workspace, the worktrees otherwise.
 /// `resolved` caches the review's resolution, which may fetch; `refresh` forces a new one.
-pub fn targets(source: &Source, resolved: &mut Option<(String, Instant, Target)>, refresh: bool) -> (Vec<Target>, Option<PathBuf>, bool) {
+pub fn targets(source: &Source, resolved: &mut Option<(String, Instant, Vec<Target>)>, refresh: bool) -> (Vec<Target>, Option<PathBuf>, bool) {
     let Some(args) = source.review_args() else {
         let found = source.roots();
         return (found.list.into_iter().map(Target::Live).collect(), found.current, false);
     };
     let stale = match resolved.as_ref() {
         None => true,
-        Some((prev, at, target)) => {
+        Some((prev, at, found)) => {
             *prev != args
                 || refresh
-                || (target.is_missing() && at.elapsed() > REVIEW_RETRY)
+                || (found.iter().any(Target::is_missing) && at.elapsed() > REVIEW_RETRY)
                 // Re-fetch now and then: the pull request may get new commits during the review.
-                || (matches!(target, Target::Ref { .. }) && at.elapsed() > PR_EVERY)
+                || (found.iter().any(|t| matches!(t, Target::Ref { .. })) && at.elapsed() > PR_EVERY)
         }
     };
     if stale {
-        let target = review::resolve(&args);
-        *resolved = Some((args, Instant::now(), target));
+        let found = review::resolve(&args);
+        *resolved = Some((args, Instant::now(), found));
     }
-    (resolved.iter().map(|(_, _, t)| t.clone()).collect(), None, true)
+    (resolved.iter().flat_map(|(_, _, found)| found.clone()).collect(), None, true)
 }
 
 pub fn spawn(source: Source, out: Sender<Snapshot>, poke: Sender<Poke>, pokes: Receiver<Poke>) {
