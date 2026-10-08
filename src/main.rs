@@ -2,6 +2,7 @@
 
 mod app;
 mod clipboard;
+mod config;
 mod diff;
 mod docs;
 mod git;
@@ -29,8 +30,9 @@ const HELP: &str = "vaglio [PATH...]
 Mostra i file che ogni worktree ha cambiato rispetto al branch di integrazione
 (origin/develop se esiste, altrimenti origin/main), con il diff di ciascuno.
 
-Senza argomenti, dentro herdr segue il workspace (lista scritta dal plugin
-layout); fuori da herdr mostra il repo della directory corrente.
+Senza argomenti, dentro herdr segue il workspace (lista scritta da un hook);
+fuori da herdr mostra il repo della directory corrente. Percorsi in
+~/.config/vaglio/config.json.
 
 vaglio --check-token [PATH]   prova il token Bitbucket sul repo di PATH (default: qui):
                               lettura e creazione delle PR

@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::pr::{self, Host};
-use crate::source::{home, worktrees_dir};
+use crate::config;
+use crate::source::worktrees_dir;
 
 /// What a group of the list is loaded from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +34,7 @@ impl Target {
 }
 
 fn umbrella() -> PathBuf {
-    home().join("Developer")
+    config::get().clones.clone()
 }
 
 /// Resolves the `/pr-review` arguments, one target per repo. May fetch, so it runs in the
@@ -42,15 +43,18 @@ pub fn resolve(args: &str) -> Vec<Target> {
     let args = args.trim();
     let what = args.lines().next().unwrap_or("").to_string();
     if args.is_empty() {
-        // Bare `/pr-review` reviews api's current branch against main.
-        return vec![Target::Live(umbrella().join("api"))];
+        // Bare `/pr-review` reviews the default clone's current branch.
+        return match &config::get().review_default {
+            Some(repo) => vec![Target::Live(umbrella().join(repo))],
+            None => vec![Target::Missing { what, why: "/pr-review senza argomenti: manca review_default nel config".into() }],
+        };
     }
     if let Some((host, id)) = pr_link(args) {
         let repo = match &host {
             Host::Bitbucket { repo, .. } | Host::GitHub { repo, .. } => repo.clone(),
         };
         let Some(clone) = clones().into_iter().find(|c| c.file_name().is_some_and(|n| n == repo.as_str())) else {
-            return vec![Target::Missing { what, why: format!("nessun clone di {repo} in ~/Developer") }];
+            return vec![Target::Missing { what, why: format!("nessun clone di {repo} in {}", config::tilde(&umbrella())) }];
         };
         return vec![match pr::branches(&clone, &host, id) {
             Ok((src, dst)) => locate(&src, Some(&clone), Some(&dst))
@@ -256,7 +260,7 @@ fn worktrees() -> Vec<PathBuf> {
     subdirs(&worktrees_dir()).iter().flat_map(|repo| subdirs(repo)).filter(|p| p.join(".git").exists()).collect()
 }
 
-/// The main checkouts under the umbrella: `umbrella/<repo>` and `umbrella/<category>/<repo>`.
+/// The main checkouts under the umbrella: `<clones>/<repo>` and `<clones>/<category>/<repo>`.
 fn clones() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for dir in subdirs(&umbrella()) {

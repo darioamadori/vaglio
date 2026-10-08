@@ -232,7 +232,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     if app.groups.is_empty() {
         let msg = vec![
             Line::from(Span::styled(" nessun worktree in questo workspace", Style::new().fg(DIM))),
-            Line::from(Span::styled(" compare appena Claude scrive in ~/Developer/worktrees", Style::new().fg(DIM))),
+            Line::from(Span::styled(
+                format!(" compare appena Claude scrive in {}", crate::config::tilde(&crate::config::get().worktrees)),
+                Style::new().fg(DIM),
+            )),
         ];
         f.render_widget(Paragraph::new(msg), area);
         return;

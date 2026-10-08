@@ -1,7 +1,6 @@
 //! Which worktrees vaglio shows.
 //!
-//! Inside herdr it follows the chat of its tab. The `layout` plugin and its `follow.sh`
-//! hook write the worktree that tab's Claude is working in to `<state>/tabs/<tab id>` (the file
+//! Inside herdr it follows the chat of its tab. A herdr plugin and its Claude Code hook write the worktree that tab's Claude is working in to `<state>/tabs/<tab id>` (the file
 //! yazi follows too), and append every worktree any chat of the workspace works in to
 //! `<state>/spaces/<workspace id>`. The tab's worktree comes first and is where the selection
 //! lands; the rest of the workspace follows, for a task spread over several repos. With neither,
@@ -21,13 +20,11 @@ pub fn home() -> PathBuf {
 }
 
 pub fn worktrees_dir() -> PathBuf {
-    home().join("Developer/worktrees")
+    crate::config::get().worktrees.clone()
 }
 
 fn state_dir() -> PathBuf {
-    std::env::var_os("VAGLIO_STATE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".local/state/vaglio"))
+    crate::config::get().state_dir.clone()
 }
 
 #[derive(Clone, Debug)]

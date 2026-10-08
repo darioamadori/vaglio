@@ -76,8 +76,8 @@ tab**, the same way the file manager next to it does. It reads two state files, 
 path per line, and redraws whenever either changes:
 
 ```
-~/.local/state/vaglio/tabs/<tab id>          # this chat's worktree
-~/.local/state/vaglio/spaces/<workspace id>  # every chat's, in the workspace
+<state>/tabs/<tab id>          # this chat's worktree
+<state>/spaces/<workspace id>  # every chat's, in the workspace
 ```
 
 The tab's worktree comes first, marked `●`, and is where the selection lands; when the chat
@@ -91,7 +91,27 @@ Whatever writes those files decides what shows. In my setup it is a Claude Code 
 moves the tab only at the edges of a turn: when the prompt names a branch or ticket, and at
 `Stop`, to the last worktree the chat actually worked in (an edit, a git write, a `cd` there).
 A chat that only peeks at another branch leaves the pane where it is. A worktree
-that is removed simply drops out. `VAGLIO_STATE_DIR` points vaglio at another state directory.
+that is removed simply drops out.
+
+### Config
+
+The places vaglio looks are in `~/.config/vaglio/config.json` (or under `$XDG_CONFIG_HOME`).
+Every key is optional, and the defaults are these:
+
+```json
+{
+  "worktrees": "~/Developer/worktrees",
+  "clones": "~/Developer",
+  "state_dir": "~/.local/state/vaglio",
+  "review_default": null
+}
+```
+
+`worktrees` holds the task worktrees as `<repo>/<name>`: a pane opened on one of them follows it,
+and each is named after its repo. `clones` holds the main checkouts, as `<repo>` or
+`<category>/<repo>`, where a review looks for branches no worktree has (see below). `state_dir`
+is `<state>`, the directory the hook writes; `VAGLIO_STATE_DIR` overrides it. `review_default`
+is the clone a bare `/pr-review` reviews.
 
 ## Pull requests
 
@@ -168,7 +188,7 @@ default browser, a Markdown file in VS Code (each falling back to the system def
 The list is a state file next to the other two, one JSON object per line:
 
 ```
-~/.local/state/vaglio/docs/<workspace id>
+<state>/docs/<workspace id>
 {"kind": "artifact", "title": "Model bake-off", "target": "https://claude.ai/code/artifact/…", "at": 1790259848}
 ```
 
@@ -200,7 +220,7 @@ The hook saves what followed the command to another state file, and each new `/p
 replaces it:
 
 ```
-~/.local/state/vaglio/review/<workspace id>
+<state>/review/<workspace id>
 ```
 
 vaglio reads it as a pull request link (Bitbucket `…/pull-requests/<id>` or GitHub
@@ -209,11 +229,11 @@ first branch name it finds in the text (`feature/PROJ-42-checkout`, or a sentenc
 or else as a ticket key (`PROJ-42`): the branch carrying it, a worktree's first, then the most
 recently committed `origin/` branch of any main checkout.
 The worktree already on that branch wins, since it is what the reviewing chat reads; otherwise
-it takes the repo's main checkout under `~/Developer`, fetches the branch, and diffs
+it takes the repo's main checkout under `clones`, fetches the branch, and diffs
 `origin/<branch>` against its merge base with the pull request's destination (or the
 integration branch). The fetch is repeated every minute and on <kbd>r</kbd>, so new commits on
-the pull request show up. A bare `/pr-review` reviews `api`'s current branch, as the
-command does.
+the pull request show up. A bare `/pr-review` reviews the current branch of the
+`review_default` clone.
 
 ## Mouse
 
@@ -278,6 +298,7 @@ vaglio --snapshot 90x24 $'\nfn' ~/some/worktree | less -R   # hunks only, second
 | File | Does |
 |---|---|
 | `src/source.rs` | which worktrees to show: arguments, the herdr workspace list, or the current repo |
+| `src/config.rs` | where the worktrees, the main checkouts and the state files live |
 | `src/git.rs` | changed files and per-file diffs |
 | `src/diff.rs` | parses a unified diff into rows: line numbers, syntax colours, changed words |
 | `src/pr.rs` | the pull request of a branch, on Bitbucket or GitHub |

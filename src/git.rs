@@ -82,7 +82,7 @@ pub fn toplevel(dir: &Path) -> Option<PathBuf> {
     git_str(dir, &["rev-parse", "--show-toplevel"]).ok().map(PathBuf::from)
 }
 
-/// `worktrees/<repo>/<name>` is named after its repo; anything else after the folder
+/// `<worktrees>/<repo>/<name>` is named after its repo; anything else after the folder
 /// holding its main checkout.
 fn repo_name(root: &Path) -> String {
     let worktrees = crate::source::worktrees_dir();
